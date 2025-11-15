@@ -23,21 +23,22 @@ async function bootstrap() {
 
   // Swagger configuration
   const config = new DocumentBuilder()
-    .setTitle('OpenLeague Backend API')
+    .setTitle('Arka CDN - Arkiv Network Storage API')
     .setDescription(
-      'API REST para gestión de torneos con integración blockchain (Hardhat) y base de datos (Prisma)',
+      'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
     )
     .setVersion('1.0')
     .addTag('health', 'Health check endpoints')
     .addTag('auth', 'Autenticación y gestión de usuarios')
     .addTag('users', 'Gestión de usuarios')
+    .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
     .addTag('blockchain', 'Interacción con smart contracts')
     .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document, {
-    customSiteTitle: 'OpenLeague API Docs',
+    customSiteTitle: 'Arka CDN API Docs',
     customfavIcon: 'https://nestjs.com/img/logo-small.svg',
     customCss: '.swagger-ui .topbar { display: none }',
   });
@@ -47,5 +48,6 @@ async function bootstrap() {
 
   console.log(`🚀 Application is running on: http://localhost:${port}/api`);
   console.log(`📚 Swagger documentation: http://localhost:${port}/api/docs`);
+  console.log(`📦 Arkiv Network CDN with DASH streaming enabled`);
 }
 bootstrap();

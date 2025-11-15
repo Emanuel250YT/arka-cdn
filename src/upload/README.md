@@ -25,9 +25,41 @@ Para comprimir videos, necesitas tener instalado **FFmpeg** en tu sistema:
 - **Linux**: `sudo apt-get install ffmpeg`
 - **macOS**: `brew install ffmpeg`
 
+## Tipos de Archivos Soportados
+
+El sistema ahora soporta múltiples tipos de archivos:
+
+### Imágenes
+
+- Formatos: `jpeg`, `jpg`, `png`, `gif`
+- Compresión automática disponible
+
+### Videos
+
+- Formatos: `mp4`, `avi`, `mov`, `wmv`, `webm`, `mkv`
+- Compresión automática y streaming DASH disponible
+
+### Archivos de Texto
+
+- Formatos: `txt`, `md`, `csv`, `log`, `xml`, `html`, `css`, `js`, `ts`, `jsx`, `tsx`
+- Se almacenan sin compresión
+
+### Archivos de Datos
+
+- Formatos: `json`, `yaml`, `yml`, `toml`, `ini`, `conf`, `config`
+- Endpoints especiales para JSON parseado
+
+### Documentos
+
+- Formatos: `pdf`
+
+### Archivos Comprimidos
+
+- Formatos: `zip`, `tar`, `gz`
+
 ## Características de Compresión Automática
 
-El sistema comprime automáticamente todos los archivos antes de subirlos:
+El sistema comprime automáticamente imágenes y videos antes de subirlos (opcional):
 
 ### Imágenes
 
@@ -46,6 +78,12 @@ El sistema comprime automáticamente todos los archivos antes de subirlos:
 - ✅ Optimización para streaming (faststart)
 - ✅ Mantiene la relación de aspecto
 - ✅ Reducción típica del 50-70% del tamaño original
+
+### Archivos Planos (JSON, Texto, etc.)
+
+- ✅ Se almacenan sin compresión para mantener compatibilidad
+- ✅ Acceso directo al contenido como texto
+- ✅ JSON se puede obtener parseado automáticamente
 
 ## Almacenamiento en Arkiv Network
 
@@ -70,7 +108,7 @@ Los archivos se almacenan en **Arkiv Network** con las siguientes característic
 
 **POST** `/upload`
 
-Sube una imagen o video, lo comprime automáticamente, y lo guarda en Arkiv Network.
+Sube cualquier tipo de archivo soportado y lo guarda en Arkiv Network.
 
 **Headers:**
 
@@ -81,13 +119,14 @@ Content-Type: multipart/form-data
 
 **Body (form-data):**
 
-- `file`: Archivo (imagen o video) - **Requerido**
+- `file`: Archivo (imagen, video, JSON, texto, etc.) - **Requerido**
 - `description`: Descripción del archivo - Opcional
+- `compress`: Comprimir archivo (solo imágenes/videos) - Opcional, default: `true`
+- `enableDashStreaming`: Convertir a DASH streaming (solo videos) - Opcional, default: `false`
 
 **Límites:**
 
-- Tamaño máximo: 100MB (antes de compresión)
-- Tipos permitidos: jpeg, jpg, png, gif, mp4, avi, mov, wmv, webm
+- Tamaño máximo: 100MB (sin streaming) / 500MB (con streaming)
 - Chunk size: 1MB (si el archivo es mayor, se divide automáticamente)
 
 **Respuesta exitosa:**
@@ -98,35 +137,38 @@ Content-Type: multipart/form-data
   "message": "File uploaded successfully",
   "data": {
     "fileId": "uuid",
-    "arkivAddress": "0x...", // EntityKey de Arkiv (si el archivo es pequeño)
-    "chunks": [
-      // Solo si el archivo fue chunkeado
-      {
-        "index": 0,
-        "address": "0x...", // EntityKey del chunk
-        "size": 1048576
-      }
-    ],
-    "totalSize": 1500000, // Tamaño después de compresión
-    "originalSize": 5000000, // Tamaño original del archivo
-    "compressed": true // Indica si el archivo fue comprimido
+    "arkivAddresses": ["entityKey1", "entityKey2"],
+    "totalSize": 1500000,
+    "originalSize": 5000000,
+    "compressed": true,
+    "chunks": 2
   }
 }
 ```
 
-**Ejemplo con cURL:**
+**Ejemplo - Subir JSON:**
 
 ```bash
 curl -X POST http://localhost:3000/upload \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
-  -F "file=@/path/to/image.jpg"
+  -F "file=@config.json" \
+  -F "description=Configuration file"
 ```
 
-**Ejemplo con JavaScript/Fetch:**
+**Ejemplo - Subir Texto:**
+
+```bash
+curl -X POST http://localhost:3000/upload \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "file=@README.md"
+```
+
+**Ejemplo - Subir Imagen con JavaScript:**
 
 ```javascript
 const formData = new FormData();
 formData.append('file', fileInput.files[0]);
+formData.append('compress', 'true');
 
 const response = await fetch('http://localhost:3000/upload', {
   method: 'POST',
@@ -138,11 +180,6 @@ const response = await fetch('http://localhost:3000/upload', {
 
 const result = await response.json();
 console.log('Archivo subido:', result.data);
-console.log('Entity Key:', result.data.arkivAddress);
-console.log(
-  'Compresión:',
-  Math.round((1 - result.data.totalSize / result.data.originalSize) * 100) + '%',
-);
 ```
 
 ### 2. Listar Archivos del Usuario
@@ -165,7 +202,7 @@ Authorization: Bearer <token>
   "data": [
     {
       "id": "uuid",
-      "originalName": "video.mp4",
+      "originalName": "config.json",
       "mimeType": "video/mp4",
       "size": 5242880,
       "encoding": "buffer",
@@ -203,25 +240,110 @@ Authorization: Bearer <token>
   "success": true,
   "data": {
     "id": "uuid",
-    "originalName": "image.jpg",
-    "mimeType": "image/jpeg",
+    "originalName": "config.json",
+    "mimeType": "application/json",
     "size": 524288,
-    "encoding": "buffer",
-    "arkivAddress": "0x...",
+    "encoding": "base64",
+    "arkivAddress": "entityKey",
     "createdAt": "2024-01-01T00:00:00.000Z",
-    "updatedAt": "2024-01-01T00:00:00.000Z",
     "chunks": []
   }
 }
 ```
 
-### 4. Eliminar Archivo
+### 4. Obtener Archivo como Texto
+
+**GET** `/upload/:id/text`
+
+Obtiene el contenido de archivos de texto, JSON, XML, etc. como string UTF-8.
+
+**Soporta:**
+
+- Archivos de texto (.txt, .md, .csv, .log, etc.)
+- JSON (.json)
+- XML (.xml)
+- Código fuente (.js, .ts, .html, .css, etc.)
+- YAML (.yaml, .yml)
+
+**Headers:**
+
+```
+Authorization: Bearer <token>
+```
+
+**Respuesta:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "fileId": "uuid",
+    "originalName": "config.json",
+    "mimeType": "application/json",
+    "size": 1234,
+    "content": "{\"key\": \"value\"}",
+    "encoding": "utf-8"
+  }
+}
+```
+
+**Ejemplo:**
+
+```bash
+curl -X GET http://localhost:3000/upload/file-id/text \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### 5. Obtener Archivo JSON Parseado
+
+**GET** `/upload/:id/json`
+
+Obtiene y parsea automáticamente archivos JSON.
+
+**Headers:**
+
+```
+Authorization: Bearer <token>
+```
+
+**Respuesta:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "fileId": "uuid",
+    "originalName": "config.json",
+    "data": {
+      "key": "value",
+      "nested": {
+        "property": 123
+      }
+    }
+  }
+}
+```
+
+**Ejemplo con JavaScript:**
+
+```javascript
+const response = await fetch('http://localhost:3000/upload/file-id/json', {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+});
+
+const { data } = await response.json();
+console.log('JSON parseado:', data.data);
+```
+
+### 6. Eliminar Archivo
 
 **DELETE** `/upload/:id`
 
 Elimina un archivo y todos sus chunks asociados de la base de datos.
 
-**Nota**: Los datos en Arkiv Network expiran automáticamente después de 12 horas.
+**Nota**: Los datos en Arkiv Network expiran automáticamente después de 30 días.
 
 **Headers:**
 
@@ -244,17 +366,19 @@ Authorization: Bearer <token>
 
 1. **Recepción del archivo**: El servidor recibe el archivo via `multipart/form-data`
 2. **Validación**: Verifica tipo y tamaño del archivo
-3. **Compresión automática**:
+3. **Detección de tipo**: Identifica si es imagen, video o archivo plano
+4. **Compresión opcional**:
    - **Imágenes**: Redimensiona a máximo 1080p y comprime a JPEG con calidad 80%
    - **Videos**: Redimensiona a máximo 1080p, recodifica con H.264 y optimiza audio
-4. **Chunking** (si es necesario):
+   - **Archivos planos**: No se comprimen, se almacenan tal cual
+5. **Chunking** (si es necesario):
    - Si el archivo es > 1MB, se divide en chunks de 1MB
    - Cada chunk se sube por separado
-5. **Storage en Arkiv**:
+6. **Storage en Arkiv**:
    - Usa `createWalletClient` y `createEntity` del SDK de Arkiv
    - Crea entities con attributes para metadata
    - Cada entity tiene una expiración de 12 horas
-6. **Guardado en BD**: Guarda referencias en PostgreSQL con:
+7. **Guardado en BD**: Guarda referencias en PostgreSQL con:
    - Información del archivo (nombre, tipo, tamaño comprimido)
    - EntityKey de Arkiv (si es archivo pequeño)
    - Lista de chunks con sus EntityKeys (si es archivo grande)

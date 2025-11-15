@@ -1,307 +1,525 @@
-# OpenLeague Backend
+# Arka CDN - Decentralized Storage with DASH Streaming
 
-Backend en NestJS con soporte para Prisma (ORM) y Hardhat (Smart Contracts).
+NestJS backend with decentralized storage on Arkiv Network, video conversion to DASH format, and intelligent file compression.
 
-## 🚀 Características
+## 🚀 Main Features
 
-- **NestJS**: Framework progresivo de Node.js para aplicaciones server-side
-- **Prisma**: ORM moderno para TypeScript y Node.js
-- **Hardhat**: Entorno de desarrollo para Ethereum
-- **Smart Contracts**: Contrato TournamentManager para gestión de torneos on-chain
-- **Autenticación JWT**: Sistema completo de auth con tokens revocables
-- **Multi-Wallet**: Soporte para vincular múltiples wallets (Ethereum, Polygon, BSC, etc.)
-- **Login con Wallet**: Autenticación con wallet + OTP por email
-- **Swagger**: Documentación interactiva de API REST
-- **TypeScript**: Tipado estático completo
-- **Validación**: Class-validator para validación de DTOs
+- ✅ **Decentralized Storage**: Integration with Arkiv Network
+- ✅ **DASH Streaming**: Automatic video conversion to adaptive format
+- ✅ **Intelligent Compression**: Automatic optimization for images and videos
+- ✅ **Plain Files**: Support for JSON, text, YAML, XML and more
+- ✅ **Multiple Resolutions**: 1080p, 720p, 480p, 360p for videos
+- ✅ **Automatic Chunking**: Large file splitting into 1MB chunks
+- ✅ **Swagger UI**: Complete interactive documentation
+- ✅ **Prisma ORM**: PostgreSQL database
+- ✅ **JWT Authentication**: Robust security system
+- ✅ **TypeScript**: Fully typed code
+- ✅ **Complete Validation**: DTOs with class-validator
 
-## 📋 Requisitos Previos
+## 📁 Supported File Types
 
-- Node.js (v18 o superior)
-- PostgreSQL (para Prisma)
-- npm o yarn
+- **Images**: JPEG, PNG, GIF (with optional compression)
+- **Videos**: MP4, AVI, MOV, WebM, MKV (with compression and DASH streaming)
+- **Text**: TXT, MD, CSV, LOG, XML, HTML, CSS, JS, TS
+- **Data**: JSON, YAML, TOML, INI, CONFIG
+- **Documents**: PDF
+- **Archives**: ZIP, TAR, GZ
 
-## 🛠️ Instalación
+## 📋 Prerequisites
 
-1. **Clonar o navegar al proyecto**
+- **Node.js** (v18 or higher)
+- **PostgreSQL** (v13 or higher)
+- **FFmpeg** (for video conversion)
+- npm or yarn
+
+### Install FFmpeg
 
 ```bash
-cd openleague-backend
+# Windows (chocolatey)
+choco install ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Linux
+sudo apt-get install ffmpeg
 ```
 
-2. **Instalar dependencias**
+## 🛠️ Installation
+
+1. **Clone the repository**
+
+```bash
+git clone https://github.com/Emanuel250YT/arka-cdn.git
+cd arka-cdn
+```
+
+2. **Install dependencies**
 
 ```bash
 npm install
 ```
 
-3. **Configurar variables de entorno**
+3. **Configure environment variables**
 
 ```bash
 cp .env.example .env
 ```
 
-Edita el archivo `.env` con tus configuraciones:
+Edit the `.env` file:
 
-- `DATABASE_URL`: URL de conexión a PostgreSQL
-- `JWT_SECRET`: Clave secreta para firmar tokens JWT
-- `JWT_ACCESS_EXPIRATION`: Tiempo de expiración de access tokens (ej: "15m")
-- `JWT_REFRESH_EXPIRATION`: Tiempo de expiración de refresh tokens (ej: "7d")
-- `EMAIL_HOST`: Servidor SMTP (ej: "smtp.gmail.com")
-- `EMAIL_PORT`: Puerto SMTP (587)
-- `EMAIL_USER`: Tu email para enviar mensajes
-- `EMAIL_PASSWORD`: Contraseña de aplicación de Gmail
-- `RPC_URL`: URL del proveedor RPC (Alchemy, Infura, etc.)
-- `PRIVATE_KEY`: Clave privada para deployments
-- `CONTRACT_ADDRESS`: Dirección del contrato desplegado
+```env
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/arka_cdn
 
-4. **Configurar Prisma**
+# Arkiv Network
+ARKIV_PRIVATE_KEY=your_private_key_without_0x
 
-```bash
-# Generar el cliente de Prisma
-npm run prisma:generate
+# JWT
+JWT_SECRET=your_secret_key
+JWT_ACCESS_EXPIRATION=15m
+JWT_REFRESH_EXPIRATION=7d
 
-# Ejecutar migraciones
-npm run prisma:migrate
+# Email (optional)
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASSWORD=your_password
+
+# Server
+PORT=3000
 ```
 
-5. **Compilar Smart Contracts**
+4. **Configure Prisma**
 
 ```bash
-npm run hardhat:compile
+# Generate Prisma client
+npx prisma generate
+
+# Run migrations
+npx prisma migrate deploy
 ```
 
-## 🏃‍♂️ Ejecución
+5. **Verify FFmpeg**
 
-### Desarrollo
+```bash
+ffmpeg -version
+```
+
+## 🏃‍♂️ Running the Application
+
+### Development
 
 ```bash
 npm run start:dev
 ```
 
-El servidor estará disponible en `http://localhost:3000/api`
+The server will be available at:
 
-**📚 Documentación Swagger:** `http://localhost:3000/api/docs`
+- **API**: `http://localhost:3000/api`
+- **Swagger UI**: `http://localhost:3000/api/docs`
 
-### Producción
+### Production
 
 ```bash
 npm run build
 npm run start:prod
 ```
 
-## 🔗 Blockchain
+## 📚 Documentation
 
-### Iniciar red local de Hardhat
+### Swagger UI
 
-```bash
-npx hardhat node
+Access the interactive documentation at:
+
+```
+http://localhost:3000/api/docs
 ```
 
-### Desplegar contratos
+### Additional Documentation
+
+- **[API_DOCUMENTATION.md](./API_DOCUMENTATION.md)**: Complete endpoint guide
+- **[DASH_STREAMING.md](./DASH_STREAMING.md)**: Streaming technical guide
+- **[IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md)**: Implementation summary
+- **[examples/api-usage.ts](./examples/api-usage.ts)**: Example code
+
+## 🎬 Quick Start
+
+### 1. Upload Image with Compression
 
 ```bash
-# Red local
-npm run hardhat:deploy
-
-# Red de prueba (Sepolia)
-npx hardhat run scripts/deploy.ts --network sepolia
+curl -X POST http://localhost:3000/api/upload/file \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@image.jpg" \
+  -F "compress=true"
 ```
 
-### Probar contratos
+### 2. Upload Video without Modification
 
 ```bash
-npm run hardhat:test
+curl -X POST http://localhost:3000/api/upload/file \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@video.mp4" \
+  -F "compress=false" \
+  -F "enableDashStreaming=false"
+```
+
+### 3. Upload Plain Text Data as JSON
+
+```bash
+curl -X POST http://localhost:3000/api/upload/plain \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": {"key": "value", "config": {"theme": "dark"}},
+    "filename": "config.json",
+    "description": "Configuration file"
+  }'
+```
+
+### 4. Upload File (Form Data)
+
+```bash
+curl -X POST http://localhost:3000/api/upload/file \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@config.json" \
+  -F "description=Configuration file"
+```
+
+### 5. Get Parsed JSON File
+
+```bash
+curl -X GET http://localhost:3000/api/upload/{fileId}/json \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "fileId": "uuid",
+    "originalName": "config.json",
+    "data": {
+      "key": "value",
+      "nested": { "prop": 123 }
+    }
+  }
+}
+```
+
+### 6. Get Text File Content
+
+```bash
+curl -X GET http://localhost:3000/api/upload/{fileId}/text \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "fileId": "uuid",
+    "originalName": "README.md",
+    "mimeType": "text/markdown",
+    "content": "# My text file content...",
+    "encoding": "utf-8"
+  }
+}
+```
+
+### 7. Convert Video to DASH Streaming
+
+```bash
+curl -X POST http://localhost:3000/api/upload/video/dash \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@video.mp4" \
+  -F 'resolutions=["1080p","720p","480p"]'
+```
+
+### 8. Play DASH Video
+
+```html
+<script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+<video id="player" controls></video>
+
+<script>
+  const url = 'http://localhost:3000/api/upload/video/{videoId}/manifest';
+  const player = dashjs.MediaPlayer().create();
+  player.initialize(document.querySelector('#player'), url, true);
+</script>
+```
+
+### JavaScript Examples
+
+```javascript
+// Upload JSON data as plain text
+async function uploadPlainJSON(data, filename = 'data.json') {
+  const response = await fetch('http://localhost:3000/api/upload/plain', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      data: data,
+      filename: filename,
+      description: 'Uploaded via API',
+    }),
+  });
+
+  return response.json();
+}
+
+// Upload file using form data
+async function uploadFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('description', 'My file');
+  formData.append('compress', 'true');
+
+  const response = await fetch('http://localhost:3000/api/upload/file', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  return response.json();
+}
+
+// Get and parse JSON
+async function getJSON(fileId) {
+  const response = await fetch(`http://localhost:3000/api/upload/${fileId}/json`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const { data } = await response.json();
+  return data.data; // Parsed JSON content
+}
+
+// Usage
+const myData = { config: { theme: 'dark', version: '1.0' } };
+
+// Option 1: Upload as plain JSON
+const uploaded1 = await uploadPlainJSON(myData, 'config.json');
+console.log('File ID:', uploaded1.data.fileId);
+
+// Option 2: Upload file using form data
+const blob = new Blob([JSON.stringify(myData)], { type: 'application/json' });
+const file = new File([blob], 'config.json', { type: 'application/json' });
+const uploaded2 = await uploadFile(file);
+console.log('File ID:', uploaded2.data.fileId);
+
+// Retrieve data
+const retrieved = await getJSON(uploaded1.data.fileId);
+console.log('Config:', retrieved);
 ```
 
 ## 📊 Prisma Studio
 
-Para visualizar y editar datos en la base de datos:
+To visualize and edit database data:
 
 ```bash
-npm run prisma:studio
+npx prisma studio
 ```
 
-## 🗂️ Estructura del Proyecto
+## 🗂️ Project Structure
 
 ```
-openleague-backend/
-├── contracts/              # Smart Contracts de Solidity
-│   └── TournamentManager.sol
-├── prisma/                 # Configuración de Prisma
-│   └── schema.prisma
-├── scripts/                # Scripts de deployment
-│   └── deploy.ts
-├── src/                    # Código fuente
-│   ├── auth/              # Módulo de autenticación
-│   │   ├── decorators/
+arka-cdn/
+├── contracts/              # Smart Contracts (Hardhat)
+├── prisma/                 # Schema and migrations
+│   ├── schema.prisma
+│   └── migrations/
+├── src/                    # Source code
+│   ├── auth/              # JWT Authentication
+│   ├── email/             # Email service
+│   ├── prisma/            # Prisma client
+│   ├── upload/            # 🆕 Upload Module
 │   │   ├── dto/
-│   │   ├── entities/
-│   │   ├── guards/
-│   │   ├── interfaces/
-│   │   ├── strategies/
-│   │   ├── auth.controller.ts
-│   │   ├── auth.module.ts
-│   │   └── auth.service.ts
-│   ├── email/             # Módulo de email
-│   │   ├── email.module.ts
-│   │   └── email.service.ts
-│   ├── prisma/            # Módulo de Prisma
-│   │   ├── prisma.module.ts
-│   │   └── prisma.service.ts
-│   ├── users/             # Módulo de usuarios
-│   │   ├── dto/
-│   │   ├── users.controller.ts
-│   │   ├── users.module.ts
-│   │   └── users.service.ts
-│   ├── app.controller.ts
+│   │   │   ├── upload-file.dto.ts
+│   │   │   └── upload-video.dto.ts
+│   │   ├── dash-converter.service.ts
+│   │   ├── upload.controller.ts
+│   │   ├── upload.module.ts
+│   │   └── upload.service.ts
+│   ├── user/
 │   ├── app.module.ts
-│   ├── app.service.ts
 │   └── main.ts
-├── hardhat.config.ts      # Configuración de Hardhat
-├── AUTH_SYSTEM.md         # Documentación del sistema de autenticación
-├── QUICK_START.md         # Guía de inicio rápido
+├── examples/              # 🆕 Example code
+│   └── api-usage.ts
+├── API_DOCUMENTATION.md   # 🆕 Complete documentation
+├── DASH_STREAMING.md      # 🆕 Streaming guide
+├── IMPLEMENTATION_SUMMARY.md  # 🆕 Summary
 ├── package.json
 └── tsconfig.json
 ```
 
 ## 📡 API Endpoints
 
-### General
+### 🔐 Authentication
 
-- `GET /api` - Mensaje de bienvenida
-- `GET /api/health` - Health check
+- `POST /api/auth/register` - Register user
+- `POST /api/auth/login` - Login with email/password
+- `POST /api/auth/refresh` - Refresh token
+- `POST /api/auth/logout` - Logout
+- `GET /api/auth/me` - Get profile
 
-### Autenticación 🔐
+### 📁 Upload & Storage
 
-- `POST /api/auth/register` - Registrar usuario
-- `POST /api/auth/login` - Login (email/contraseña o wallet)
-- `POST /api/auth/verify-otp` - Verificar código OTP
-- `POST /api/auth/refresh` - Refrescar access token
-- `POST /api/auth/logout` - Cerrar sesión (requiere JWT)
-- `POST /api/auth/wallets` - Vincular wallet (requiere JWT)
-- `GET /api/auth/wallets` - Listar wallets (requiere JWT)
-- `GET /api/auth/me` - Obtener perfil (requiere JWT)
+#### File Uploads
 
-> 📖 **Documentación completa:** Ver [AUTH_SYSTEM.md](./AUTH_SYSTEM.md)
+- `POST /api/upload/file` - **Upload file** (form-data with file)
+- `POST /api/upload/plain` - **Upload plain text/JSON** (raw JSON body)
+- `GET /api/upload` - List files
+- `GET /api/upload/:id` - Get file info
+- `GET /api/upload/:id/text` - Get text file content
+- `GET /api/upload/:id/json` - Get parsed JSON file
+- `DELETE /api/upload/:id` - Delete file
 
-### Usuarios
+#### Video Streaming
 
-- `POST /api/users` - Crear usuario
-- `GET /api/users` - Listar usuarios
-- `GET /api/users/:id` - Obtener usuario por ID
-- `GET /api/users/wallet/:address` - Obtener usuario por wallet
-- `PATCH /api/users/:id` - Actualizar usuario
-- `DELETE /api/users/:id` - Eliminar usuario
+- `POST /api/upload/video/dash` - **Convert video to DASH**
+- `GET /api/upload/video/:id/manifest` - **Get MPD manifest**
+- `GET /api/upload/video/:id/info` - **Streaming info**
 
-### Blockchain
+> 📖 **See complete documentation:** [API_DOCUMENTATION.md](./API_DOCUMENTATION.md)
 
-- `POST /api/blockchain/tournament` - Crear torneo on-chain
-- `GET /api/blockchain/tournament/:id` - Obtener torneo
-- `POST /api/blockchain/tournament/:id/participant` - Agregar participante
-- `GET /api/blockchain/tournament/:id/participants` - Listar participantes
-- `POST /api/blockchain/tournament/:id/payout` - Pagar a ganadores
+## 🎯 Detailed Features
 
-## 🧪 Testing
+### 🗜️ Automatic Compression
 
-```bash
-# Tests unitarios
-npm run test
+**Images:**
 
-# Tests e2e
-npm run test:e2e
+- Resize to max 1920x1080
+- Convert to optimized JPEG
+- Quality 80% with mozjpeg
+- Reduction: 60-80%
 
-# Coverage
-npm run test:cov
-```
+**Videos:**
 
-## 🎯 Ejemplos de Uso
+- Resize to max 1920x1080
+- H.264 codec, medium preset
+- CRF 23 (balanced quality)
+- AAC audio 128kbps
+- Reduction: 50-70%
 
-### Registrar y autenticar un usuario
+### 🎬 DASH Streaming
 
-```bash
-# 1. Registrar usuario
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "player@example.com",
-    "password": "SecurePass123!",
-    "name": "Player One"
-  }'
+**Available resolutions:**
 
-# 2. Vincular wallet al usuario (usando el accessToken del registro)
-curl -X POST http://localhost:3000/api/auth/wallets \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
-  -d '{
-    "address": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
-    "network": "ethereum",
-    "currency": "ETH",
-    "isDefault": true
-  }'
+- **1080p**: 1920x1080, bitrate 5000k
+- **720p**: 1280x720, bitrate 2800k
+- **480p**: 854x480, bitrate 1400k
+- **360p**: 640x360, bitrate 800k
 
-# 3. Login con wallet (recibe OTP por email)
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"walletAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"}'
+**Features:**
 
-# 4. Verificar OTP
-curl -X POST http://localhost:3000/api/auth/verify-otp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "walletAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
-    "code": "123456"
-  }'
-```
+- Segmentation in 4-second chunks
+- Automatic adaptation by bandwidth
+- MPD manifest generation
+- Compatible with DASH.js and Shaka Player
 
-### Crear un torneo on-chain
+### 💾 Arkiv Storage
+
+- Decentralized Mendoza network
+- 1MB chunks
+- Expiration: 30 days (configurable)
+- Metadata in attributes
+- Transaction hashes saved
+
+## 🔧 Available Scripts
 
 ```bash
-curl -X POST http://localhost:3000/api/blockchain/tournament \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Championship 2024", "prizePool": "1.0"}'
+# Development
+npm run start:dev          # Start in development mode
+npm run build              # Build project
+npm run start:prod         # Start in production
+
+# Database
+npm run prisma:generate    # Generate Prisma client
+npm run prisma:migrate     # Run migrations
+npm run prisma:studio      # Open Prisma Studio
+
+# Blockchain (Hardhat)
+npm run hardhat:compile    # Compile contracts
+npm run hardhat:test       # Test contracts
+npm run hardhat:deploy     # Deploy contracts
+
+# Testing
+npm run test               # Run tests
+npm run test:watch         # Tests in watch mode
+npm run test:cov           # Test coverage
 ```
 
-### Crear un usuario
+## 🌐 Technologies Used
 
-```bash
-curl -X POST http://localhost:3000/api/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "player@example.com",
-    "name": "Player One",
-    "walletAddress": "0x..."
-  }'
-```
+| Category       | Technologies                       |
+| -------------- | ---------------------------------- |
+| **Backend**    | NestJS, TypeScript, Node.js        |
+| **Database**   | PostgreSQL, Prisma ORM             |
+| **Blockchain** | Hardhat, Ethers.js, Solidity       |
+| **Storage**    | Arkiv Network SDK                  |
+| **Video**      | FFmpeg, fluent-ffmpeg              |
+| **Images**     | Sharp                              |
+| **Auth**       | JWT, Passport, bcryptjs            |
+| **Validation** | class-validator, class-transformer |
+| **Docs**       | Swagger/OpenAPI                    |
+| **Email**      | Nodemailer, Resend                 |
 
-## 🔐 Smart Contract
+## 📊 Limits and Configuration
 
-El contrato `TournamentManager` incluye:
+| Resource         | Limit   | Configurable |
+| ---------------- | ------- | ------------ |
+| Normal file size | 100MB   | ✅ Yes       |
+| DASH video size  | 500MB   | ✅ Yes       |
+| Chunk size       | 1MB     | ✅ Yes       |
+| DASH segment     | 4s      | ✅ Yes       |
+| Arkiv expiration | 30 days | ✅ Yes       |
+| DASH resolutions | 4       | ✅ Yes       |
 
-- Creación de torneos con prize pool
-- Gestión de participantes
-- Distribución de premios
-- Control de acceso (solo organizador)
-- Protección contra reentrancy
+## 🔒 Security
 
-## 📚 Documentación Adicional
+- ✅ Mandatory JWT authentication
+- ✅ File type validation
+- ✅ Size limits per type
+- ✅ Filename sanitization
+- ✅ Rate limiting (configurable)
+- ✅ CORS enabled
+- ✅ Helmet (security headers)
 
-- [NestJS Documentation](https://docs.nestjs.com)
-- [Prisma Documentation](https://www.prisma.io/docs)
-- [Hardhat Documentation](https://hardhat.org/docs)
+## 🤝 Contributing
 
-## 🤝 Contribuir
+Contributions are welcome! Please:
 
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
+1. Fork the project
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-## 📄 Licencia
+## 📝 License
 
-MIT
+This project is under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 👨‍💻 Autor
+## 📧 Contact
 
-Tu nombre aquí
+- **GitHub**: [@Emanuel250YT](https://github.com/Emanuel250YT)
+- **Project**: [arka-cdn](https://github.com/Emanuel250YT/arka-cdn)
+
+## 🙏 Acknowledgments
+
+- [NestJS](https://nestjs.com/) - Backend framework
+- [Prisma](https://www.prisma.io/) - Modern ORM
+- [Arkiv Network](https://arkiv.network/) - Decentralized storage
+- [FFmpeg](https://ffmpeg.org/) - Video processing
+- [DASH Industry Forum](https://dashif.org/) - DASH standard
+
+---
+
+**⭐ If this project was useful to you, consider giving it a star on GitHub!**
+
+**Developed with ❤️ by Emanuel250YT**

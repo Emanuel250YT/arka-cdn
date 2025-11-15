@@ -16,7 +16,7 @@ import {
   ApiBody,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { RegisterDto, LoginDto, VerifyOtpDto, AddWalletDto, CreateOpenLeagueWalletDto } from './dto';
+import { RegisterDto, LoginDto } from './dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { GetUser } from './decorators/get-user.decorator';
 
@@ -26,14 +26,14 @@ export class AuthController {
   constructor(private authService: AuthService) { }
 
   @Post('register')
-  @ApiOperation({ summary: 'Registrar un nuevo usuario' })
+  @ApiOperation({ summary: 'Register a new user' })
   @ApiResponse({
     status: 201,
-    description: 'Usuario registrado exitosamente',
+    description: 'User registered successfully',
   })
   @ApiResponse({
     status: 409,
-    description: 'El email ya está registrado',
+    description: 'Email already registered',
   })
   async register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
@@ -42,46 +42,25 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Iniciar sesión con email/contraseña o wallet',
+    summary: 'Login with email and password',
     description:
-      'Si se proporciona email y contraseña, retorna tokens JWT. Si se proporciona walletAddress, envía un código OTP al email vinculado.',
+      'Authenticates a user with email and password, returns JWT tokens.',
   })
   @ApiResponse({
     status: 200,
-    description: 'Login exitoso o OTP enviado',
+    description: 'Login successful',
   })
   @ApiResponse({
     status: 401,
-    description: 'Credenciales inválidas',
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Wallet no encontrada',
+    description: 'Invalid credentials',
   })
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
   }
 
-  @Post('verify-otp')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Verificar código OTP y completar login con wallet',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Login exitoso',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Código OTP inválido o expirado',
-  })
-  async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
-    return this.authService.verifyOtpAndLogin(verifyOtpDto);
-  }
-
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refrescar access token usando refresh token' })
+  @ApiOperation({ summary: 'Refresh access token using refresh token' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -95,91 +74,38 @@ export class AuthController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Access token renovado',
+    description: 'Access token refreshed',
   })
   @ApiResponse({
     status: 401,
-    description: 'Refresh token inválido o expirado',
+    description: 'Invalid or expired refresh token',
   })
   async refresh(@Body('refreshToken') refreshToken: string) {
     return this.authService.refreshAccessToken(refreshToken);
-  }
-
-  @Post('create-open-league-wallet')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Crear wallet con proveedor Open League usando Coinbase CDP',
-    description:
-      'Crea una wallet usando Coinbase CDP con el proveedor "open league" y la vincula automáticamente al usuario. No requiere OTP, solo email, password y accessToken de Coinbase.',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Wallet de Open League creada y vinculada exitosamente',
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Credenciales inválidas o token de Coinbase inválido',
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'La wallet ya está vinculada a una cuenta',
-  })
-  async createOpenLeagueWallet(
-    @Body() createOpenLeagueWalletDto: CreateOpenLeagueWalletDto,
-  ) {
-    return this.authService.createOpenLeagueWallet(createOpenLeagueWalletDto);
   }
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cerrar sesión (revocar token)' })
+  @ApiOperation({ summary: 'Logout (revoke token)' })
   @ApiResponse({
     status: 200,
-    description: 'Sesión cerrada exitosamente',
+    description: 'Session closed successfully',
   })
   async logout(@Headers('authorization') authorization: string) {
     const token = authorization?.replace('Bearer ', '');
     await this.authService.logout(token);
-    return { message: 'Sesión cerrada exitosamente' };
-  }
-
-  @Post('wallets')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Vincular una wallet a la cuenta' })
-  @ApiResponse({
-    status: 201,
-    description: 'Wallet vinculada exitosamente',
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'Esta wallet ya está vinculada a una cuenta',
-  })
-  async addWallet(@GetUser('id') userId: string, @Body() addWalletDto: AddWalletDto) {
-    return this.authService.addWallet(userId, addWalletDto);
-  }
-
-  @Get('wallets')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Obtener todas las wallets del usuario' })
-  @ApiResponse({
-    status: 200,
-    description: 'Lista de wallets del usuario',
-  })
-  async getWallets(@GetUser('id') userId: string) {
-    return this.authService.getUserWallets(userId);
+    return { message: 'Session closed successfully' };
   }
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Obtener información del usuario autenticado' })
+  @ApiOperation({ summary: 'Get authenticated user information' })
   @ApiResponse({
     status: 200,
-    description: 'Información del usuario',
+    description: 'User information',
   })
   async getProfile(@GetUser() user: any) {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

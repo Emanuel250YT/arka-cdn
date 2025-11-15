@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { DashConverterService } from './dash-converter.service';
 import { createWalletClient, createPublicClient } from '@arkiv-network/sdk';
 import { http } from '@arkiv-network/sdk';
 import { privateKeyToAccount } from '@arkiv-network/sdk/accounts';
@@ -7,7 +8,7 @@ import { mendoza } from '@arkiv-network/sdk/chains';
 import { ExpirationTime, jsonToPayload } from '@arkiv-network/sdk/utils';
 import sharp from 'sharp';
 import Ffmpeg from 'fluent-ffmpeg';
-import { writeFile, unlink } from 'fs/promises';
+import { writeFile, unlink, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes, randomUUID } from 'crypto';
@@ -23,7 +24,10 @@ export class UploadService implements OnModuleInit {
   private readonly IMAGE_QUALITY = 80; // Calidad de compresión
   private readonly VIDEO_RESOLUTION = '1920x1080'; // Máximo 1080p
 
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private dashConverter: DashConverterService,
+  ) { }
 
   async onModuleInit() {
     try {
@@ -250,6 +254,7 @@ export class UploadService implements OnModuleInit {
   async uploadFile(
     file: Express.Multer.File,
     userId: string,
+    enableCompression: boolean = true,
   ): Promise<{
     fileId: string;
     arkivAddresses: string[];
@@ -259,20 +264,37 @@ export class UploadService implements OnModuleInit {
     chunks: number;
   }> {
     this.logger.log(
-      `Uploading file: ${file.originalname}, size: ${file.size} bytes, type: ${file.mimetype}`,
+      `Uploading file: ${file.originalname}, size: ${file.size} bytes, type: ${file.mimetype}, compression: ${enableCompression}`,
     );
 
     const originalSize = file.size;
     let processedBuffer = file.buffer;
     let compressed = false;
 
-    // Compress based on file type
-    if (file.mimetype.startsWith('image/')) {
-      processedBuffer = await this.compressImage(file.buffer);
-      compressed = true;
-    } else if (file.mimetype.startsWith('video/')) {
-      processedBuffer = await this.compressVideo(file.buffer, file.originalname);
-      compressed = true;
+    // Determine file type category
+    const isImage = file.mimetype.startsWith('image/');
+    const isVideo = file.mimetype.startsWith('video/');
+    const isText = file.mimetype.startsWith('text/') ||
+      file.mimetype.includes('json') ||
+      file.mimetype.includes('xml') ||
+      file.mimetype.includes('yaml') ||
+      file.mimetype.includes('javascript') ||
+      file.mimetype.includes('typescript');
+    const isPlainFile = !isImage && !isVideo;
+
+    // Compress based on file type (only if enabled and applicable)
+    if (enableCompression && (isImage || isVideo)) {
+      if (isImage) {
+        processedBuffer = await this.compressImage(file.buffer);
+        compressed = true;
+      } else if (isVideo) {
+        processedBuffer = await this.compressVideo(file.buffer, file.originalname);
+        compressed = true;
+      }
+    } else if (isPlainFile) {
+      this.logger.log(`Uploading plain file (${file.mimetype}) without compression`);
+    } else {
+      this.logger.log('Compression disabled, uploading original file');
     }
 
     // Split into chunks
@@ -445,5 +467,310 @@ export class UploadService implements OnModuleInit {
     });
 
     return { message: 'File deleted successfully' };
+  }
+
+  /**
+   * Get file as text (for JSON, text files, etc.)
+   * Returns the file content as a string instead of base64
+   */
+  async getFileAsText(fileId: string, userId: string): Promise<{
+    fileId: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    content: string;
+    encoding: string;
+  }> {
+    const file = await this.prisma.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+      },
+      include: {
+        chunks: {
+          orderBy: {
+            chunkIndex: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    // Verify it's a text-based file
+    const isTextFile = file.mimeType.startsWith('text/') ||
+      file.mimeType.includes('json') ||
+      file.mimeType.includes('xml') ||
+      file.mimeType.includes('yaml') ||
+      file.mimeType.includes('javascript') ||
+      file.mimeType.includes('typescript');
+
+    if (!isTextFile) {
+      throw new Error('File is not a text-based file. Use getFile() with includeData=true for binary files.');
+    }
+
+    try {
+      const chunksData = [];
+
+      for (const chunk of file.chunks) {
+        this.logger.log(`Retrieving chunk ${chunk.chunkIndex} from Arkiv...`);
+        const entity = await this.publicClient.getEntity(chunk.arkivAddress);
+
+        if (entity && entity.payload) {
+          const payloadStr = Buffer.from(entity.payload).toString('utf-8');
+          const payloadJson = JSON.parse(payloadStr);
+
+          if (payloadJson.data) {
+            const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
+            chunksData.push({
+              index: chunk.chunkIndex,
+              data: chunkBuffer,
+            });
+          }
+        }
+      }
+
+      // Sort chunks by index and concatenate
+      chunksData.sort((a, b) => a.index - b.index);
+      const completeBuffer = Buffer.concat(chunksData.map(c => c.data));
+
+      // Convert to string with appropriate encoding
+      const content = completeBuffer.toString('utf-8');
+
+      return {
+        fileId: file.id,
+        originalName: file.originalName,
+        mimeType: file.mimeType,
+        size: file.size,
+        content,
+        encoding: 'utf-8',
+      };
+    } catch (error) {
+      this.logger.error('Error retrieving text file from Arkiv:', error);
+      throw new Error('Failed to retrieve text file from Arkiv');
+    }
+  }
+
+  /**
+   * Get file as JSON (parses JSON files automatically)
+   */
+  async getFileAsJson(fileId: string, userId: string): Promise<{
+    fileId: string;
+    originalName: string;
+    data: any;
+  }> {
+    const file = await this.prisma.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+      },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    if (!file.mimeType.includes('json')) {
+      throw new Error('File is not a JSON file');
+    }
+
+    const textFile = await this.getFileAsText(fileId, userId);
+
+    try {
+      const data = JSON.parse(textFile.content);
+
+      return {
+        fileId: file.id,
+        originalName: file.originalName,
+        data,
+      };
+    } catch (error) {
+      this.logger.error('Error parsing JSON:', error);
+      throw new Error('Failed to parse JSON file');
+    }
+  }
+
+  /**
+   * Upload video with DASH conversion
+   */
+  async uploadVideoWithDash(
+    file: Express.Multer.File,
+    userId: string,
+    resolutions: string[] = ['1080p', '720p', '480p', '360p'],
+  ): Promise<{
+    fileId: string;
+    manifestUrl: string;
+    duration: number;
+    resolutions: string[];
+    totalSegments: number;
+  }> {
+    this.logger.log(
+      `Uploading video with DASH conversion: ${file.originalname}`,
+    );
+
+    // Crear registro inicial del archivo
+    const fileRecord = await this.prisma.file.create({
+      data: {
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        encoding: file.encoding,
+        userId,
+        isDashVideo: true,
+        processingStatus: 'processing',
+      },
+    });
+
+    try {
+      // Convertir a DASH
+      this.logger.log('Converting video to DASH format...');
+      const dashResult = await this.dashConverter.convertToDash(
+        file.buffer,
+        file.originalname,
+        resolutions,
+      );
+
+      // Subir manifest a Arkiv
+      this.logger.log('Uploading DASH manifest to Arkiv...');
+      const manifestBuffer = Buffer.from(dashResult.manifestContent, 'utf-8');
+      const manifestUpload = await this.uploadToArkiv(manifestBuffer, {
+        fileName: `${file.originalname}.mpd`,
+        mimeType: 'application/dash+xml',
+        size: manifestBuffer.length,
+        userId,
+      });
+
+      // Subir todos los segmentos a Arkiv
+      this.logger.log(
+        `Uploading ${dashResult.segments.length} segments to Arkiv...`,
+      );
+      const segmentRecords = [];
+
+      for (const segment of dashResult.segments) {
+        const segmentBuffer = await readFile(segment.path);
+        const segmentUpload = await this.uploadToArkiv(segmentBuffer, {
+          fileName: `${file.originalname}_${segment.resolution}_${segment.index}`,
+          mimeType: 'video/mp4',
+          size: segment.size,
+          userId,
+        });
+
+        segmentRecords.push({
+          segmentIndex: segment.index,
+          resolution: segment.resolution,
+          arkivAddress: segmentUpload.entityKey,
+          duration: 4, // Duración del segmento (configurable)
+          size: segment.size,
+          txHash: segmentUpload.txHash,
+        });
+
+        this.logger.log(
+          `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
+        );
+      }
+
+      // Actualizar el registro del archivo con toda la información
+      await this.prisma.file.update({
+        where: { id: fileRecord.id },
+        data: {
+          dashManifest: dashResult.manifestContent,
+          dashManifestUrl: manifestUpload.entityKey,
+          videoDuration: dashResult.duration,
+          videoResolutions: JSON.stringify(dashResult.resolutions),
+          processingStatus: 'completed',
+          arkivAddress: manifestUpload.entityKey,
+          videoSegments: {
+            create: segmentRecords,
+          },
+        },
+      });
+
+      this.logger.log(
+        `Video processing completed successfully: ${fileRecord.id}`,
+      );
+
+      return {
+        fileId: fileRecord.id,
+        manifestUrl: manifestUpload.entityKey,
+        duration: dashResult.duration,
+        resolutions: dashResult.resolutions,
+        totalSegments: dashResult.segments.length,
+      };
+    } catch (error) {
+      this.logger.error('Error processing video with DASH:', error);
+
+      // Actualizar el estado a fallido
+      await this.prisma.file.update({
+        where: { id: fileRecord.id },
+        data: {
+          processingStatus: 'failed',
+        },
+      });
+
+      throw new Error(`Failed to process video with DASH: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get video manifest
+   */
+  async getVideoManifest(fileId: string, userId: string): Promise<string> {
+    const file = await this.prisma.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+        isDashVideo: true,
+      },
+    });
+
+    if (!file) {
+      throw new Error('Video not found');
+    }
+
+    if (!file.dashManifest) {
+      throw new Error('Video manifest not available');
+    }
+
+    return file.dashManifest;
+  }
+
+  /**
+   * Get video streaming info
+   */
+  async getVideoStreamingInfo(fileId: string, userId: string) {
+    const file = await this.prisma.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+        isDashVideo: true,
+      },
+      include: {
+        videoSegments: {
+          orderBy: [{ resolution: 'desc' }, { segmentIndex: 'asc' }],
+        },
+      },
+    });
+
+    if (!file) {
+      throw new Error('Video not found');
+    }
+
+    return {
+      fileId: file.id,
+      originalName: file.originalName,
+      duration: file.videoDuration,
+      resolutions: JSON.parse(file.videoResolutions || '[]'),
+      manifestUrl: file.dashManifestUrl,
+      processingStatus: file.processingStatus,
+      segments: file.videoSegments.map((seg) => ({
+        index: seg.segmentIndex,
+        resolution: seg.resolution,
+        arkivAddress: seg.arkivAddress,
+        duration: seg.duration,
+        size: seg.size,
+      })),
+    };
   }
 }
