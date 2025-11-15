@@ -776,6 +776,90 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
+   * Get file by UUID (public access, no user validation)
+   * Retrieves and reassembles file from Arkiv blockchain
+   */
+  async getFileByUuid(fileId: string): Promise<{
+    fileId: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    fileData: string; // base64 encoded
+  }> {
+    const file = await this.prisma.file.findUnique({
+      where: {
+        id: fileId,
+      },
+      include: {
+        chunks: {
+          orderBy: {
+            chunkIndex: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    if (!this.publicClient) {
+      throw new Error('Arkiv client not initialized');
+    }
+
+    try {
+      this.logger.log(`Reassembling file ${file.originalName} from ${file.chunks.length} chunks`);
+      const chunksData = [];
+
+      for (const chunk of file.chunks) {
+        this.logger.debug(`Retrieving chunk ${chunk.chunkIndex}/${file.chunks.length} from ${chunk.arkivAddress}`);
+
+        if (chunk.arkivAddress === 'pending' || chunk.uploadStatus !== 'completed') {
+          throw new Error(`File is not fully uploaded. Chunk ${chunk.chunkIndex} is ${chunk.uploadStatus}`);
+        }
+
+        const entity = await this.publicClient.getEntity(chunk.arkivAddress);
+
+        if (entity && entity.payload) {
+          // Parse the JSON payload and extract the base64 data
+          const payloadStr = Buffer.from(entity.payload).toString('utf-8');
+          const payloadJson = JSON.parse(payloadStr);
+
+          if (payloadJson.data) {
+            const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
+            chunksData.push({
+              index: chunk.chunkIndex,
+              data: chunkBuffer,
+            });
+            this.logger.debug(`Retrieved chunk ${chunk.chunkIndex}: ${chunkBuffer.length} bytes`);
+          } else {
+            throw new Error(`Chunk ${chunk.chunkIndex} has no data in payload`);
+          }
+        } else {
+          throw new Error(`Chunk ${chunk.chunkIndex} not found in Arkiv`);
+        }
+      }
+
+      // Sort chunks by index and concatenate
+      chunksData.sort((a, b) => a.index - b.index);
+      const completeBuffer = Buffer.concat(chunksData.map(c => c.data));
+
+      this.logger.log(`File reassembled: ${completeBuffer.length} bytes`);
+
+      return {
+        fileId: file.id,
+        originalName: file.originalName,
+        mimeType: file.mimeType,
+        size: completeBuffer.length,
+        fileData: completeBuffer.toString('base64'),
+      };
+    } catch (error) {
+      this.logger.error('Error retrieving file data from Arkiv:', error);
+      throw new Error(`Failed to retrieve file data: ${error.message}`);
+    }
+  }
+
+  /**
    * Get file as text (for JSON, text files, etc.)
    * Returns the file content as a string instead of base64
    */

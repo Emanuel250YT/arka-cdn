@@ -201,7 +201,71 @@ curl -X POST http://localhost:3000/api/upload/file \
   -F "enableDashStreaming=false"
 ```
 
-### 3. Upload Plain Text Data as JSON
+### 3. **Retrieve File Publicly (No Auth Required) 🆕**
+
+```bash
+# Get file directly (returns the actual file, not JSON)
+curl http://localhost:3000/data/{FILE_UUID} -o downloaded-file.jpg
+
+# Or use in HTML directly:
+# <img src="http://localhost:3000/data/{FILE_UUID}" />
+```
+
+**The endpoint now returns the file directly with the correct Content-Type**, so you can:
+- Use it directly in `<img>`, `<video>`, `<audio>` tags
+- Download files with proper mime types
+- Embed in your website without processing
+
+**Use cases:**
+
+- 🔗 Share files with public links
+- 🎨 Direct image embedding: `<img src="https://cdn.com/data/uuid" />`
+- 📦 CDN for frontend assets
+- 🌐 Public file hosting
+
+**Example with HTML:**
+
+```html
+<!-- Image -->
+<img src="http://localhost:3000/data/550e8400-e29b-41d4-a716-446655440000" />
+
+<!-- Video -->
+<video controls>
+  <source src="http://localhost:3000/data/your-video-uuid" type="video/mp4">
+</video>
+
+<!-- Download link -->
+<a href="http://localhost:3000/data/your-file-uuid" download>Download File</a>
+```
+
+**Example with TypeScript:**
+
+```typescript
+import axios from 'axios';
+
+// Download file (binary data)
+const response = await axios.get(`http://localhost:3000/data/${fileUuid}`, {
+  responseType: 'arraybuffer'
+});
+
+// Save to disk
+const fileBuffer = Buffer.from(response.data);
+fs.writeFileSync('downloaded-file.jpg', fileBuffer);
+
+// Get metadata from headers
+const contentType = response.headers['content-type'];
+const filename = response.headers['content-disposition'];
+```
+- 🌐 Public file hosting
+
+// Get metadata from headers
+const contentType = response.headers['content-type'];
+const filename = response.headers['content-disposition'];
+```
+
+See complete example in [`examples/retrieve-file-public.ts`](./examples/retrieve-file-public.ts)
+
+### 4. Upload Plain Text Data as JSON
 
 ```bash
 curl -X POST http://localhost:3000/api/upload/plain \
@@ -214,7 +278,7 @@ curl -X POST http://localhost:3000/api/upload/plain \
   }'
 ```
 
-### 4. Upload File (Form Data)
+### 5. Upload File (Form Data)
 
 ```bash
 curl -X POST http://localhost:3000/api/upload/file \
@@ -223,7 +287,7 @@ curl -X POST http://localhost:3000/api/upload/file \
   -F "description=Configuration file"
 ```
 
-### 5. Get Parsed JSON File
+### 6. Get Parsed JSON File
 
 ```bash
 curl -X GET http://localhost:3000/api/upload/{fileId}/json \
@@ -246,7 +310,7 @@ Response:
 }
 ```
 
-### 6. Get Text File Content
+### 7. Get Text File Content
 
 ```bash
 curl -X GET http://localhost:3000/api/upload/{fileId}/text \
@@ -268,7 +332,7 @@ Response:
 }
 ```
 
-### 7. Convert Video to DASH Streaming
+### 8. Convert Video to DASH Streaming
 
 ```bash
 curl -X POST http://localhost:3000/api/upload/video/dash \
@@ -277,7 +341,7 @@ curl -X POST http://localhost:3000/api/upload/video/dash \
   -F 'resolutions=["1080p","720p","480p"]'
 ```
 
-### 8. Play DASH Video
+### 9. Play DASH Video
 
 ```html
 <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>

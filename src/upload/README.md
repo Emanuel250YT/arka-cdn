@@ -405,10 +405,59 @@ Authorization: Bearer <token>
 - `size`: Tamaño del chunk en bytes
 - `fileId`: ID del archivo padre
 
+## Endpoints Públicos
+
+### GET /data/:uuid
+
+**Endpoint público** para recuperar archivos por su UUID sin necesidad de autenticación.
+
+**Características:**
+
+- ✅ No requiere autenticación
+- ✅ Rearma automáticamente el archivo desde sus chunks en Arkiv
+- ✅ Retorna el archivo completo en base64
+- ✅ Incluye metadata del archivo (nombre, tipo MIME, tamaño)
+- ✅ Verifica que todos los chunks estén completamente subidos
+- ✅ Cache público inmutable para máxima performance
+
+**Ejemplo de uso:**
+
+```bash
+# Obtener un archivo por su UUID
+curl http://localhost:3000/data/550e8400-e29b-41d4-a716-446655440000
+
+# Respuesta:
+{
+  "success": true,
+  "data": {
+    "fileId": "550e8400-e29b-41d4-a716-446655440000",
+    "originalName": "example.jpg",
+    "mimeType": "image/jpeg",
+    "size": 1024000,
+    "fileData": "base64_encoded_file_data..."
+  }
+}
+```
+
+**Casos de uso:**
+
+- Compartir archivos públicamente mediante link directo
+- Embedear imágenes en HTML: `<img src="data:image/jpeg;base64,{fileData}" />`
+- CDN público para servir assets
+- Integración con aplicaciones frontend
+
+**Errores posibles:**
+
+- `404`: Archivo no encontrado
+- `500`: Error al recuperar chunks desde Arkiv
+- `500`: El archivo no está completamente subido
+
 ## Seguridad
 
-- Todos los endpoints requieren autenticación JWT
-- Los usuarios solo pueden acceder a sus propios archivos
+- Los endpoints de `/upload` requieren autenticación JWT
+- El endpoint `/data/:uuid` es **público** y no requiere autenticación
+- Los usuarios solo pueden subir/editar/eliminar sus propios archivos
+- Los archivos son accesibles públicamente si se conoce el UUID
 - Validación de tipo y tamaño de archivo
 - Límite de 100MB por archivo (antes de compresión)
 - Private key almacenada de forma segura en variables de entorno

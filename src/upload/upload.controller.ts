@@ -15,7 +15,10 @@ import {
   BadRequestException,
   Logger,
   Header,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
@@ -813,5 +816,68 @@ export class UploadController {
       success: true,
       message: 'No action needed - wallet reset not required in new system',
     };
+  }
+}
+
+@ApiTags('Data')
+@Controller('data')
+export class DataController {
+  private readonly logger = new Logger(DataController.name);
+
+  constructor(private readonly uploadService: UploadService) { }
+
+  @Get(':uuid')
+  @Header('Cache-Control', 'public, max-age=31536000, immutable')
+  @ApiOperation({
+    summary: 'Get file by UUID (Public)',
+    description: `Public endpoint to retrieve and download files by their UUID. 
+    The file is reassembled from its chunks stored on the Arkiv blockchain and returned directly as binary data with the appropriate content type.
+    
+    This endpoint does not require authentication and can be used to share files publicly.
+    The file is returned directly, not as JSON, so it can be used in <img>, <video>, <audio> tags or downloaded directly.`,
+  })
+  @ApiParam({
+    name: 'uuid',
+    description: 'File UUID',
+    type: 'string',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'File retrieved and reassembled successfully',
+    content: {
+      '*/*': {
+        schema: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'File not found' })
+  @ApiResponse({ status: 500, description: 'Failed to retrieve file' })
+  async getFileByUuid(
+    @Param('uuid') uuid: string,
+    @Res() res: Response,
+  ) {
+    try {
+      this.logger.log(`Retrieving file ${uuid}`);
+      const result = await this.uploadService.getFileByUuid(uuid);
+
+      // Set headers
+      res.setHeader('Content-Type', result.mimeType);
+      res.setHeader('Content-Length', result.size);
+      res.setHeader('Content-Disposition', `inline; filename="${result.originalName}"`);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+      // Convert base64 to buffer and send
+      const fileBuffer = Buffer.from(result.fileData, 'base64');
+      res.send(fileBuffer);
+    } catch (error) {
+      this.logger.error(`Error retrieving file ${uuid}:`, error);
+      throw new BadRequestException(
+        error.message || 'Failed to retrieve file',
+      );
+    }
   }
 }
