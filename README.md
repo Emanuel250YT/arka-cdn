@@ -212,6 +212,7 @@ curl http://localhost:3000/data/{FILE_UUID} -o downloaded-file.jpg
 ```
 
 **The endpoint now returns the file directly with the correct Content-Type**, so you can:
+
 - Use it directly in `<img>`, `<video>`, `<audio>` tags
 - Download files with proper mime types
 - Embed in your website without processing
@@ -231,7 +232,7 @@ curl http://localhost:3000/data/{FILE_UUID} -o downloaded-file.jpg
 
 <!-- Video -->
 <video controls>
-  <source src="http://localhost:3000/data/your-video-uuid" type="video/mp4">
+  <source src="http://localhost:3000/data/your-video-uuid" type="video/mp4" />
 </video>
 
 <!-- Download link -->
@@ -245,7 +246,7 @@ import axios from 'axios';
 
 // Download file (binary data)
 const response = await axios.get(`http://localhost:3000/data/${fileUuid}`, {
-  responseType: 'arraybuffer'
+  responseType: 'arraybuffer',
 });
 
 // Save to disk
@@ -256,12 +257,14 @@ fs.writeFileSync('downloaded-file.jpg', fileBuffer);
 const contentType = response.headers['content-type'];
 const filename = response.headers['content-disposition'];
 ```
+
 - 🌐 Public file hosting
 
 // Get metadata from headers
 const contentType = response.headers['content-type'];
 const filename = response.headers['content-disposition'];
-```
+
+````
 
 See complete example in [`examples/retrieve-file-public.ts`](./examples/retrieve-file-public.ts)
 
@@ -276,7 +279,7 @@ curl -X POST http://localhost:3000/api/upload/plain \
     "filename": "config.json",
     "description": "Configuration file"
   }'
-```
+````
 
 ### 5. Upload File (Form Data)
 
