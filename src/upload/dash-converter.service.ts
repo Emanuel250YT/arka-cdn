@@ -23,12 +23,25 @@ export class DashConverterService {
   private readonly logger = new Logger(DashConverterService.name);
 
   // Mapeo de resoluciones a dimensiones
-  private readonly RESOLUTION_MAP = {
+  private readonly RESOLUTION_MAP: Record<string, { width: number; height: number; bitrate: string }> = {
     '1080p': { width: 1920, height: 1080, bitrate: '5000k' },
     '720p': { width: 1280, height: 720, bitrate: '2800k' },
     '480p': { width: 854, height: 480, bitrate: '1400k' },
     '360p': { width: 640, height: 360, bitrate: '800k' },
   };
+
+  /**
+   * Calcula el bitrate apropiado basado en la resolución
+   */
+  private calculateBitrate(width: number, height: number): string {
+    const pixels = width * height;
+
+    // Bitrate based on pixel count
+    if (pixels >= 1920 * 1080) return '5000k';
+    if (pixels >= 1280 * 720) return '2800k';
+    if (pixels >= 854 * 480) return '1400k';
+    return '800k';
+  }
 
   /**
    * Convierte un video a formato DASH con múltiples resoluciones
@@ -57,11 +70,26 @@ export class DashConverterService {
       this.logger.log(`Video info: ${JSON.stringify(videoInfo)}`);
 
       // Filtrar resoluciones que son mayores a la resolución original
-      const validResolutions = this.filterValidResolutions(
+      let validResolutions = this.filterValidResolutions(
         resolutions,
         videoInfo.width,
         videoInfo.height,
       );
+
+      // Si no hay resoluciones válidas, usar la resolución original del video
+      if (validResolutions.length === 0) {
+        this.logger.warn(
+          `No valid resolutions found. Using original resolution: ${videoInfo.width}x${videoInfo.height}`
+        );
+        // Crear una resolución custom para el video original
+        const customResolution = `${videoInfo.height}p`;
+        this.RESOLUTION_MAP[customResolution] = {
+          width: videoInfo.width,
+          height: videoInfo.height,
+          bitrate: this.calculateBitrate(videoInfo.width, videoInfo.height),
+        };
+        validResolutions = [customResolution];
+      }
 
       this.logger.log(`Valid resolutions: ${validResolutions.join(', ')}`);
 
@@ -151,7 +179,13 @@ export class DashConverterService {
     resolutions: string[],
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (resolutions.length === 0) {
+        reject(new Error('No resolutions provided for DASH conversion'));
+        return;
+      }
+
       const command = Ffmpeg(inputPath);
+      const manifestPath = join(outputDir, 'manifest.mpd');
 
       // Build complex filter for multiple resolutions
       const videoMaps = [];
@@ -159,6 +193,10 @@ export class DashConverterService {
 
       resolutions.forEach((resolution, index) => {
         const config = this.RESOLUTION_MAP[resolution];
+        if (!config) {
+          this.logger.warn(`Resolution ${resolution} not found in RESOLUTION_MAP`);
+          return;
+        }
         filterComplex.push(
           `[0:v]scale=${config.width}:${config.height}[v${index}]`
         );
@@ -168,28 +206,34 @@ export class DashConverterService {
       // Add audio stream mapping
       videoMaps.push('-map 0:a');
 
-      const manifestPath = join(outputDir, 'manifest.mpd');
+      // Build output options
+      const outputOptions = [];
+
+      // Only add filter_complex if we have multiple resolutions or need scaling
+      if (resolutions.length > 1 || filterComplex.length > 0) {
+        outputOptions.push('-filter_complex', filterComplex.join(';'));
+      }
+
+      outputOptions.push(
+        ...videoMaps,
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-profile:v', 'high',
+        '-level', '4.1',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ar', '48000',
+        '-f', 'dash',
+        '-seg_duration', '4',
+        '-use_template', '1',
+        '-use_timeline', '1',
+        '-adaptation_sets', 'id=0,streams=v id=1,streams=a',
+        '-init_seg_name', 'init-stream$RepresentationID$.m4s',
+        '-media_seg_name', 'chunk-stream$RepresentationID$-$Number%05d$.m4s',
+      );
 
       command
-        .outputOptions([
-          '-filter_complex',
-          filterComplex.join(';'),
-          ...videoMaps,
-          '-c:v libx264',
-          '-preset fast',
-          '-profile:v high',
-          '-level 4.1',
-          '-c:a aac',
-          '-b:a 128k',
-          '-ar 48000',
-          '-f dash',
-          '-seg_duration 4',
-          '-use_template 1',
-          '-use_timeline 1',
-          '-adaptation_sets id=0,streams=v id=1,streams=a',
-          '-init_seg_name init-stream$RepresentationID$.m4s',
-          '-media_seg_name chunk-stream$RepresentationID$-$Number%05d$.m4s',
-        ])
+        .outputOptions(outputOptions)
         .output(manifestPath);
 
       // Set bitrates for each video stream

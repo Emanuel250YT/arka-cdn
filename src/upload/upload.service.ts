@@ -177,7 +177,7 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Upload a single buffer to Arkiv using createEntity
+   * Upload a single buffer to Arkiv using createEntity with retry logic
    */
   private async uploadToArkiv(
     buffer: Buffer,
@@ -190,63 +190,101 @@ export class UploadService implements OnModuleInit {
       userId: string;
     },
   ): Promise<{ entityKey: string; txHash: string }> {
-    try {
-      if (!this.arkivClient) {
-        throw new Error('Arkiv client not initialized');
+    const maxRetries = 5;
+    let retryCount = 0;
+    let lastError: Error;
+
+    while (retryCount < maxRetries) {
+      try {
+        if (!this.arkivClient) {
+          throw new Error('Arkiv client not initialized');
+        }
+
+        const entityId = randomUUID();
+        const isChunk = metadata.chunkIndex !== undefined;
+
+        if (retryCount > 0) {
+          this.logger.log(`Retry attempt ${retryCount}/${maxRetries} for: ${isChunk ? `chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks}` : 'full file'}`);
+        } else {
+          this.logger.log(`Preparing to upload: ${isChunk ? `chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks}` : 'full file'}, size: ${metadata.size} bytes`);
+        }
+
+        // Create entity with proper SDK methods
+        const result = await this.arkivClient.createEntity({
+          payload: jsonToPayload({
+            entity: {
+              entityType: isChunk ? 'file-chunk' : 'file',
+              entityId,
+              fileName: metadata.fileName,
+              mimeType: metadata.mimeType,
+              userId: metadata.userId,
+              size: metadata.size,
+              uploadedAt: Date.now(),
+              ...(isChunk && {
+                chunkIndex: metadata.chunkIndex,
+                totalChunks: metadata.totalChunks,
+              }),
+            },
+            data: buffer.toString('base64'), // Convert buffer to base64 for JSON payload
+          }),
+          contentType: 'application/json',
+          attributes: [
+            { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
+            { key: 'fileName', value: metadata.fileName },
+            { key: 'mimeType', value: metadata.mimeType },
+            { key: 'userId', value: metadata.userId },
+            ...(isChunk
+              ? [
+                { key: 'chunkIndex', value: metadata.chunkIndex.toString() },
+                { key: 'totalChunks', value: metadata.totalChunks.toString() },
+              ]
+              : []),
+          ],
+          expiresIn: ExpirationTime.fromDays(30), // 30 days expiration
+        });
+
+        this.logger.log(
+          `Entity created on Arkiv - Key: ${result.entityKey}, TX: ${result.txHash}`,
+        );
+
+        return {
+          entityKey: result.entityKey,
+          txHash: result.txHash,
+        };
+      } catch (error) {
+        lastError = error;
+        const errorMessage = error.message || String(error);
+
+        // Check if it's a nonce error or transaction error that can be retried
+        const isNonceError = errorMessage.includes('nonce too low') ||
+          errorMessage.includes('nonce too high') ||
+          errorMessage.includes('replacement transaction underpriced');
+
+        const isRetryableError = isNonceError ||
+          errorMessage.includes('timeout') ||
+          errorMessage.includes('network') ||
+          errorMessage.includes('connection');
+
+        if (isRetryableError && retryCount < maxRetries - 1) {
+          // Exponential backoff: 1s, 2s, 4s, 8s
+          const delayMs = Math.pow(2, retryCount) * 1000;
+          this.logger.warn(
+            `Retryable error (${isNonceError ? 'nonce issue' : 'network issue'}): ${errorMessage}. Retrying in ${delayMs}ms...`
+          );
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          retryCount++;
+          continue;
+        }
+
+        // Non-retryable error or max retries reached
+        this.logger.error('Error uploading to Arkiv:', error);
+        this.logger.error('Error stack:', error.stack);
+        throw new Error(`Failed to upload to Arkiv after ${retryCount + 1} attempts: ${errorMessage}`);
       }
-
-      const entityId = randomUUID();
-      const isChunk = metadata.chunkIndex !== undefined;
-
-      this.logger.log(`Preparing to upload: ${isChunk ? `chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks}` : 'full file'}, size: ${metadata.size} bytes`);
-
-      // Create entity with proper SDK methods
-      const result = await this.arkivClient.createEntity({
-        payload: jsonToPayload({
-          entity: {
-            entityType: isChunk ? 'file-chunk' : 'file',
-            entityId,
-            fileName: metadata.fileName,
-            mimeType: metadata.mimeType,
-            userId: metadata.userId,
-            size: metadata.size,
-            uploadedAt: Date.now(),
-            ...(isChunk && {
-              chunkIndex: metadata.chunkIndex,
-              totalChunks: metadata.totalChunks,
-            }),
-          },
-          data: buffer.toString('base64'), // Convert buffer to base64 for JSON payload
-        }),
-        contentType: 'application/json',
-        attributes: [
-          { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
-          { key: 'fileName', value: metadata.fileName },
-          { key: 'mimeType', value: metadata.mimeType },
-          { key: 'userId', value: metadata.userId },
-          ...(isChunk
-            ? [
-              { key: 'chunkIndex', value: metadata.chunkIndex.toString() },
-              { key: 'totalChunks', value: metadata.totalChunks.toString() },
-            ]
-            : []),
-        ],
-        expiresIn: ExpirationTime.fromDays(30), // 30 days expiration
-      });
-
-      this.logger.log(
-        `Entity created on Arkiv - Key: ${result.entityKey}, TX: ${result.txHash}`,
-      );
-
-      return {
-        entityKey: result.entityKey,
-        txHash: result.txHash,
-      };
-    } catch (error) {
-      this.logger.error('Error uploading to Arkiv:', error);
-      this.logger.error('Error stack:', error.stack);
-      throw new Error(`Failed to upload to Arkiv: ${error.message}`);
     }
+
+    // Should never reach here, but just in case
+    throw new Error(`Failed to upload to Arkiv after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
   }
 
   /**
@@ -306,31 +344,38 @@ export class UploadService implements OnModuleInit {
       `File will be uploaded in ${totalChunks} chunk(s) of max ${this.CHUNK_SIZE} bytes`,
     );
 
-    // Upload all chunks
+    // Upload all chunks in parallel
+    this.logger.log(`Uploading ${totalChunks} chunks in parallel...`);
     const arkivAddresses: string[] = [];
     const chunkRecords = [];
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      this.logger.log(`Uploading chunk ${i + 1}/${totalChunks}...`);
-
-      const { entityKey, txHash } = await this.uploadToArkiv(chunk, {
+    const uploadPromises = chunks.map((chunk, i) =>
+      this.uploadToArkiv(chunk, {
         fileName: file.originalname,
         mimeType: file.mimetype,
         size: chunk.length,
         chunkIndex: i,
         totalChunks,
         userId,
-      });
+      }).then(result => ({ ...result, index: i }))
+    );
 
+    const results = await Promise.all(uploadPromises);
+
+    // Sort results by index to maintain order
+    results.sort((a, b) => a.index - b.index);
+
+    for (const { entityKey, txHash, index } of results) {
       arkivAddresses.push(entityKey);
       chunkRecords.push({
-        chunkIndex: i,
+        chunkIndex: index,
         arkivAddress: entityKey,
-        size: chunk.length,
+        size: chunks[index].length,
         txHash,
       });
     }
+
+    this.logger.log(`All ${totalChunks} chunks uploaded successfully`);
 
     // Create main file record
     const savedFile = await this.prisma.file.create({
@@ -671,13 +716,14 @@ export class UploadService implements OnModuleInit {
         manifestAddress = manifestUpload.entityKey;
       }
 
-      // Subir todos los segmentos a Arkiv
+      // Subir todos los segmentos a Arkiv con control de concurrencia
       this.logger.log(
-        `Uploading ${dashResult.segments.length} segments to Arkiv...`,
+        `Uploading ${dashResult.segments.length} segments to Arkiv with controlled concurrency...`,
       );
-      const segmentRecords = [];
 
-      for (const segment of dashResult.segments) {
+      const segmentUploadPromises = dashResult.segments.map(async (segment, segmentIdx) => {
+        // Add small delay between uploads to prevent nonce conflicts
+        await new Promise(resolve => setTimeout(resolve, segmentIdx * 100));
         const segmentBuffer = await readFile(segment.path);
 
         // Si el segmento es mayor a 16KB, dividirlo en chunks
@@ -687,40 +733,34 @@ export class UploadService implements OnModuleInit {
           );
 
           const chunks = this.chunkBuffer(segmentBuffer, this.CHUNK_SIZE);
-          const chunkAddresses: string[] = [];
-          const chunkData = [];
 
-          for (let i = 0; i < chunks.length; i++) {
-            const chunkUpload = await this.uploadToArkiv(chunks[i], {
+          // Subir todos los chunks del segmento en paralelo
+          const chunkUploadPromises = chunks.map((chunk, i) =>
+            this.uploadToArkiv(chunk, {
               fileName: `${file.originalname}_${segment.resolution}_${segment.index}_chunk${i}`,
               mimeType: 'video/mp4',
-              size: chunks[i].length,
+              size: chunk.length,
               chunkIndex: i,
               totalChunks: chunks.length,
               userId,
-            });
+            }).then(result => ({ ...result, index: i }))
+          );
 
-            chunkAddresses.push(chunkUpload.entityKey);
-            chunkData.push({
-              chunkIndex: i,
-              arkivAddress: chunkUpload.entityKey,
-              size: chunks[i].length,
-              txHash: chunkUpload.txHash,
-            });
-          }
-
-          segmentRecords.push({
-            segmentIndex: segment.index,
-            resolution: segment.resolution,
-            arkivAddress: chunkAddresses[0], // Primera dirección como referencia
-            duration: 4,
-            size: segment.size,
-            txHash: chunkData[0].txHash,
-          });
+          const chunkResults = await Promise.all(chunkUploadPromises);
+          chunkResults.sort((a, b) => a.index - b.index);
 
           this.logger.log(
             `Uploaded segment ${segment.index} (${segment.resolution}) in ${chunks.length} chunks`,
           );
+
+          return {
+            segmentIndex: segment.index,
+            resolution: segment.resolution,
+            arkivAddress: chunkResults[0].entityKey,
+            duration: 4,
+            size: segment.size,
+            txHash: chunkResults[0].txHash,
+          };
         } else {
           // Segmento pequeño, subir directamente
           const segmentUpload = await this.uploadToArkiv(segmentBuffer, {
@@ -730,20 +770,23 @@ export class UploadService implements OnModuleInit {
             userId,
           });
 
-          segmentRecords.push({
+          this.logger.log(
+            `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
+          );
+
+          return {
             segmentIndex: segment.index,
             resolution: segment.resolution,
             arkivAddress: segmentUpload.entityKey,
             duration: 4,
             size: segment.size,
             txHash: segmentUpload.txHash,
-          });
-
-          this.logger.log(
-            `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
-          );
+          };
         }
-      }
+      });
+
+      const segmentRecords = await Promise.all(segmentUploadPromises);
+      this.logger.log(`All ${dashResult.segments.length} segments uploaded successfully`);
 
       // Actualizar el registro del archivo con toda la información
       await this.prisma.file.update({
