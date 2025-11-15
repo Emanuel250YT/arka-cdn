@@ -3,6 +3,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { AuthModule } from './auth/auth.module';
+import { UploadModule } from './upload/upload.module';
 import * as express from 'express';
 
 async function bootstrap() {
@@ -48,6 +50,7 @@ async function bootstrap() {
     try {
       document = SwaggerModule.createDocument(app, config, {
         deepScanRoutes: true,
+        include: [AuthModule, UploadModule, AppModule],
         operationIdFactory: (controllerKey: string, methodKey: string) =>
           `${controllerKey?.replace?.(/Controller$/, '') ?? 'Controller'}_${methodKey}`,
       });
@@ -55,7 +58,14 @@ async function bootstrap() {
       // Fallback: create with default options if advanced options fail
       // eslint-disable-next-line no-console
       console.warn('Swagger advanced options failed, retrying with defaults:', (innerErr as Error)?.message);
-      document = SwaggerModule.createDocument(app, config);
+      // Try progressively narrower includes to isolate faulty module
+      try {
+        document = SwaggerModule.createDocument(app, config, { include: [AuthModule] });
+      } catch (authErr) {
+        // eslint-disable-next-line no-console
+        console.warn('Swagger failed on AuthModule too:', (authErr as Error)?.message);
+        document = SwaggerModule.createDocument(app, config);
+      }
     }
 
     SwaggerModule.setup('api/docs', app, document, {
