@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -29,26 +30,39 @@ async function bootstrap() {
   );
 
   // Swagger configuration
-  const config = new DocumentBuilder()
-    .setTitle('Arka CDN - Arkiv Network Storage API')
-    .setDescription(
-      'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
-    )
-    .setVersion('1.0')
-    .addTag('health', 'Health check endpoints')
-    .addTag('auth', 'Autenticación y gestión de usuarios')
-    .addTag('users', 'Gestión de usuarios')
-    .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
-    .addTag('blockchain', 'Interacción con smart contracts')
-    .addBearerAuth()
-    .build();
+  try {
+    const config = new DocumentBuilder()
+      .setTitle('Arka CDN - Arkiv Network Storage API')
+      .setDescription(
+        'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
+      )
+      .setVersion('1.0')
+      .addTag('health', 'Health check endpoints')
+      .addTag('auth', 'Autenticación y gestión de usuarios')
+      .addTag('users', 'Gestión de usuarios')
+      .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
+      .addTag('blockchain', 'Interacción con smart contracts')
+      .addBearerAuth()
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document, {
-    customSiteTitle: 'Arka CDN API Docs',
-    customfavIcon: 'https://nestjs.com/img/logo-small.svg',
-    customCss: '.swagger-ui .topbar { display: none }',
-  });
+    const document = SwaggerModule.createDocument(app, config, {
+      // Deep scan helps when routes are registered dynamically/lazily
+      deepScanRoutes: true,
+      // Stable operation ids (optional, but avoids collisions)
+      operationIdFactory: (controllerKey: string, methodKey: string) =>
+        `${controllerKey.replace(/Controller$/, '')}_${methodKey}`,
+    });
+
+    SwaggerModule.setup('api/docs', app, document, {
+      customSiteTitle: 'Arka CDN API Docs',
+      customfavIcon: 'https://nestjs.com/img/logo-small.svg',
+      customCss: '.swagger-ui .topbar { display: none }',
+    });
+  } catch (err) {
+    // Do not crash the app if Swagger fails in certain environments
+    // eslint-disable-next-line no-console
+    console.warn('Swagger initialization skipped:', (err as Error)?.message);
+  }
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
