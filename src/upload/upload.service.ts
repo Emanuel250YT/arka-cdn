@@ -15,6 +15,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes, randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
+import { checkFFmpegInstalled } from './ffmpeg-check';
+import { TempDirManager } from './temp-dir-manager';
 
 @Injectable()
 export class UploadService implements OnModuleInit {
@@ -101,9 +103,40 @@ export class UploadService implements OnModuleInit {
       this.walletClients.forEach((client, index) => {
         this.logger.log(`  Wallet ${index + 1}: ${client.account.address}`);
       });
+
+      // Check FFmpeg installation (non-blocking warning)
+      this.checkFFmpegAvailability();
+
+      // Initialize temporary directories
+      await TempDirManager.initialize();
+
+      // Cleanup old temp directories (fire and forget)
+      TempDirManager.cleanupOldTempDirs().catch((error) => {
+        this.logger.warn('Failed to cleanup old temp directories:', error.message);
+      });
     } catch (error) {
       this.logger.error('Failed to initialize Arkiv client:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if FFmpeg is available (non-blocking)
+   */
+  private async checkFFmpegAvailability() {
+    try {
+      const ffmpegCheck = await checkFFmpegInstalled();
+      if (ffmpegCheck.installed) {
+        this.logger.log(`FFmpeg detected: version ${ffmpegCheck.version}`);
+      } else {
+        this.logger.warn(
+          'FFmpeg is not installed or not accessible. ' +
+          'Video compression and DASH conversion will fail. ' +
+          'Install FFmpeg from: https://ffmpeg.org/download.html'
+        );
+      }
+    } catch (error) {
+      this.logger.warn('Could not verify FFmpeg installation:', error.message);
     }
   }
 
@@ -153,17 +186,25 @@ export class UploadService implements OnModuleInit {
    * Compress and resize video to max 1080p
    */
   private async compressVideo(buffer: Buffer, originalName: string): Promise<Buffer> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const tempInputPath = join(tmpdir(), `input-${randomBytes(16).toString('hex')}-${originalName}`);
-        const tempOutputPath = join(tmpdir(), `output-${randomBytes(16).toString('hex')}.mp4`);
+    let tempDir: string;
+    let tempInputPath: string;
+    let tempOutputPath: string;
 
-        // Write buffer to temp file
-        await writeFile(tempInputPath, buffer);
+    try {
+      // Create temporary directory for this operation
+      tempDir = await TempDirManager.createTempDir('video-compression');
+      tempInputPath = TempDirManager.getTempFilePath(tempDir, `input-${originalName}`);
+      tempOutputPath = TempDirManager.getTempFilePath(tempDir, 'output.mp4');
 
-        this.logger.log('Compressing video to 1080p...');
+      // Write buffer to temp file
+      await writeFile(tempInputPath, buffer);
 
-        Ffmpeg(tempInputPath)
+      this.logger.log(`Compressing video: ${originalName} (${buffer.length} bytes) in ${tempDir}`);
+      this.logger.debug(`Input path: ${tempInputPath}`);
+      this.logger.debug(`Output path: ${tempOutputPath}`);
+
+      return new Promise((resolve, reject) => {
+        const ffmpegCommand = Ffmpeg(tempInputPath)
           .outputOptions([
             '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
             '-c:v', 'libx264',
@@ -174,36 +215,72 @@ export class UploadService implements OnModuleInit {
             '-movflags', '+faststart',
           ])
           .output(tempOutputPath)
+          .on('start', (commandLine) => {
+            this.logger.debug(`FFmpeg command: ${commandLine}`);
+          })
+          .on('progress', (progress) => {
+            if (progress.percent) {
+              this.logger.debug(`Compression progress: ${progress.percent.toFixed(1)}%`);
+            }
+          })
           .on('end', async () => {
             try {
-              const fs = await import('fs/promises');
-              const compressed = await fs.readFile(tempOutputPath);
+              const compressed = await readFile(tempOutputPath);
 
               this.logger.log(
                 `Video compressed: ${buffer.length} bytes -> ${compressed.length} bytes (${Math.round((1 - compressed.length / buffer.length) * 100)}% reduction)`,
               );
 
-              // Clean up temp files
-              await unlink(tempInputPath).catch(() => { });
-              await unlink(tempOutputPath).catch(() => { });
+              // Clean up temp directory
+              await TempDirManager.cleanupTempDir(tempDir);
 
               resolve(compressed);
             } catch (error) {
+              this.logger.error('Error reading compressed video:', error);
+              await TempDirManager.cleanupTempDir(tempDir);
               reject(error);
             }
           })
-          .on('error', async (error) => {
-            // Clean up temp files on error
-            await unlink(tempInputPath).catch(() => { });
-            await unlink(tempOutputPath).catch(() => { });
-            reject(error);
-          })
-          .run();
-      } catch (error) {
-        this.logger.error('Error compressing video:', error);
-        reject(new Error('Failed to compress video'));
-      }
-    });
+          .on('error', async (error, stdout, stderr) => {
+            this.logger.error('FFmpeg compression error:', {
+              error: error.message,
+              code: error['code'],
+              inputPath: tempInputPath,
+              outputPath: tempOutputPath,
+              tempDir: tempDir,
+              stdout: stdout || 'none',
+              stderr: stderr || 'none',
+            });
+
+            // Clean up temp directory on error
+            await TempDirManager.cleanupTempDir(tempDir);
+
+            reject(new Error(
+              `ffmpeg exited with code ${error['code']}: Conversion failed!\n` +
+              `Input: ${tempInputPath}\n` +
+              `Output: ${tempOutputPath}\n` +
+              `stdout: ${stdout || 'none'}\n` +
+              `stderr: ${stderr || 'none'}`
+            ));
+          });
+
+        // Set timeout for compression (5 minutes)
+        const timeout = setTimeout(() => {
+          ffmpegCommand.kill('SIGKILL');
+          TempDirManager.cleanupTempDir(tempDir).catch(() => { });
+          reject(new Error('Video compression timed out after 5 minutes'));
+        }, 5 * 60 * 1000);
+
+        ffmpegCommand.on('end', () => clearTimeout(timeout));
+        ffmpegCommand.on('error', () => clearTimeout(timeout));
+
+        ffmpegCommand.run();
+      });
+    } catch (error) {
+      this.logger.error('Error setting up video compression:', error);
+      if (tempDir) await TempDirManager.cleanupTempDir(tempDir);
+      throw new Error(`Failed to compress video: ${error.message}`);
+    }
   }
 
   /**
@@ -1027,6 +1104,18 @@ export class UploadService implements OnModuleInit {
 
       const segmentRecords = await Promise.all(segmentUploadPromises);
       this.logger.log(`All ${dashResult.segments.length} segments uploaded successfully`);
+
+      // Extract workDir from first segment path and cleanup
+      if (dashResult.segments.length > 0) {
+        const firstSegmentPath = dashResult.segments[0].path;
+        const workDir = firstSegmentPath.substring(0, firstSegmentPath.lastIndexOf('/') || firstSegmentPath.lastIndexOf('\\'));
+
+        // Cleanup temp directory after segments are uploaded
+        await TempDirManager.cleanupTempDir(workDir).catch((error) => {
+          this.logger.warn(`Failed to cleanup DASH work directory ${workDir}:`, error.message);
+        });
+        this.logger.log(`Cleaned up DASH work directory: ${workDir}`);
+      }
 
       // Actualizar el registro del archivo con toda la información
       await this.prisma.file.update({

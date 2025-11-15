@@ -5,6 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes } from 'crypto';
 import { existsSync } from 'fs';
+import { TempDirManager } from './temp-dir-manager';
 
 export interface DashConversionResult {
   manifestContent: string;
@@ -51,37 +52,35 @@ export class DashConverterService {
     originalName: string,
     resolutions: string[] = ['1080p', '720p', '480p', '360p'],
   ): Promise<DashConversionResult> {
-    const workDir = join(tmpdir(), `dash-${randomBytes(16).toString('hex')}`);
-    const inputPath = join(workDir, `input-${originalName}`);
+    // Create temporary directory for DASH processing
+    const workDir = await TempDirManager.createTempDir('dash-conversion');
+    const inputPath = TempDirManager.getTempFilePath(workDir, `input-${originalName}`);
 
     try {
-      // Crear directorio de trabajo
-      await mkdir(workDir, { recursive: true });
-
-      // Guardar video temporal
+      // Save temporary video
       await writeFile(inputPath, videoBuffer);
 
       this.logger.log(`Converting video to DASH format: ${originalName}`);
       this.logger.log(`Work directory: ${workDir}`);
       this.logger.log(`Target resolutions: ${resolutions.join(', ')}`);
 
-      // Obtener información del video
+      // Get video information
       const videoInfo = await this.getVideoInfo(inputPath);
       this.logger.log(`Video info: ${JSON.stringify(videoInfo)}`);
 
-      // Filtrar resoluciones que son mayores a la resolución original
+      // Filter resolutions that are greater than original resolution
       let validResolutions = this.filterValidResolutions(
         resolutions,
         videoInfo.width,
         videoInfo.height,
       );
 
-      // Si no hay resoluciones válidas, usar la resolución original del video
+      // If no valid resolutions, use original video resolution
       if (validResolutions.length === 0) {
         this.logger.warn(
           `No valid resolutions found. Using original resolution: ${videoInfo.width}x${videoInfo.height}`
         );
-        // Crear una resolución custom para el video original
+        // Create custom resolution for original video
         const customResolution = `${videoInfo.height}p`;
         this.RESOLUTION_MAP[customResolution] = {
           width: videoInfo.width,
@@ -93,14 +92,14 @@ export class DashConverterService {
 
       this.logger.log(`Valid resolutions: ${validResolutions.join(', ')}`);
 
-      // Convertir a DASH
+      // Convert to DASH
       await this.generateDashSegments(inputPath, workDir, validResolutions);
 
-      // Leer el manifest generado
+      // Read generated manifest
       const manifestPath = join(workDir, 'manifest.mpd');
       const manifestContent = await readFile(manifestPath, 'utf-8');
 
-      // Leer todos los segmentos generados
+      // Read all generated segments
       const segments = await this.collectSegments(workDir, validResolutions);
 
       this.logger.log(`DASH conversion completed. Generated ${segments.length} segments`);
@@ -113,11 +112,12 @@ export class DashConverterService {
       };
     } catch (error) {
       this.logger.error('Error converting to DASH:', error);
+      // Cleanup on error
+      await TempDirManager.cleanupTempDir(workDir);
       throw new Error(`Failed to convert video to DASH: ${error.message}`);
-    } finally {
-      // Limpiar archivos temporales (opcional, puedes querer mantenerlos para debugging)
-      // await this.cleanupWorkDir(workDir);
     }
+    // Note: workDir is NOT cleaned up here to allow segment reading
+    // It will be cleaned up by the periodic cleanup or after segments are uploaded
   }
 
   /**
@@ -243,16 +243,30 @@ export class DashConverterService {
       });
 
       command
+        .on('start', (commandLine) => {
+          this.logger.debug(`FFmpeg DASH command: ${commandLine}`);
+        })
         .on('end', () => {
           this.logger.log('DASH segments generated successfully');
           resolve();
         })
-        .on('error', (err) => {
-          this.logger.error('FFmpeg error:', err);
-          reject(err);
+        .on('error', (err, stdout, stderr) => {
+          this.logger.error('FFmpeg DASH conversion error:', {
+            error: err.message,
+            code: err['code'],
+            stdout: stdout?.substring(0, 500),
+            stderr: stderr?.substring(0, 500),
+          });
+          reject(new Error(
+            `FFmpeg DASH conversion failed: ${err.message}. ` +
+            `Error code: ${err['code']}. ` +
+            `Make sure FFmpeg is installed and supports DASH format.`
+          ));
         })
         .on('progress', (progress) => {
-          this.logger.debug(`Processing: ${progress.percent}% done`);
+          if (progress.percent) {
+            this.logger.debug(`DASH processing: ${progress.percent.toFixed(1)}% done`);
+          }
         })
         .run();
     });
