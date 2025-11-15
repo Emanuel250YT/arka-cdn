@@ -1,0 +1,151 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  password   String
+  name       String?
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tournaments Tournament[]
+  wallets     Wallet[]
+  tokens      Token[]
+  otpCodes    OtpCode[]
+  files       File[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  address   String   @unique
+  network   String // ethereum, polygon, bsc, etc.
+  currency  String // ETH, MATIC, BNB, etc.
+  provider  String // metamask, coinbase, walletconnect, open league, etc.
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("wallets")
+}
+
+model Token {
+  id        String    @id @default(uuid())
+  token     String    @unique
+  type      TokenType @default(ACCESS)
+  isRevoked Boolean   @default(false)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("tokens")
+}
+
+model OtpCode {
+  id        String   @id @default(uuid())
+  code      String
+  purpose   String // 'wallet_login', 'email_verification', etc.
+  expiresAt DateTime
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("otp_codes")
+}
+
+enum TokenType {
+  ACCESS
+  REFRESH
+}
+
+model Tournament {
+  id              String           @id @default(uuid())
+  name            String
+  description     String?
+  prizePool       Float            @default(0)
+  contractAddress String?
+  status          TournamentStatus @default(PENDING)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organizerId String
+  organizer   User   @relation(fields: [organizerId], references: [id])
+
+  participants Participant[]
+
+  @@map("tournaments")
+}
+
+model Participant {
+  id            String   @id @default(uuid())
+  walletAddress String
+  score         Int      @default(0)
+  rank          Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id])
+
+  @@unique([tournamentId, walletAddress])
+  @@map("participants")
+}
+
+enum TournamentStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model File {
+  id           String   @id @default(uuid())
+  originalName String
+  mimeType     String
+  size         Int
+  encoding     String   @default("base64")
+  arkivAddress String? // Dirección principal si el archivo es pequeño
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chunks FileChunk[]
+
+  @@map("files")
+}
+
+model FileChunk {
+  id           String   @id @default(uuid())
+  chunkIndex   Int
+  arkivAddress String
+  size         Int
+  txHash       String? // Transaction hash from Arkiv
+  createdAt    DateTime @default(now())
+
+  fileId String
+  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, chunkIndex])
+  @@map("file_chunks")
+}
