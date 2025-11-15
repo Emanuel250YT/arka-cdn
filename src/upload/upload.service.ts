@@ -141,6 +141,21 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
+   * Check if file has expired based on expiresAt field
+   */
+  private checkFileExpiration(file: any): void {
+    if (file.expiresAt) {
+      const now = new Date();
+      const expiresAt = new Date(file.expiresAt);
+
+      if (now > expiresAt) {
+        this.logger.warn(`File ${file.id} has expired (expiresAt: ${expiresAt.toISOString()})`);
+        throw new Error('File has expired and is no longer available');
+      }
+    }
+  }
+
+  /**
    * Compress and resize image
    */
   private async compressImage(buffer: Buffer): Promise<Buffer> {
@@ -533,6 +548,7 @@ export class UploadService implements OnModuleInit {
     file: Express.Multer.File,
     userId: string,
     enableCompression: boolean = true,
+    ttl?: number,
   ): Promise<{
     fileId: string;
     status: string;
@@ -574,6 +590,13 @@ export class UploadService implements OnModuleInit {
 
     this.logger.log(`File split into ${totalChunks} chunk(s)`);
 
+    // Calculate expiration date if TTL is provided
+    let expiresAt: Date | null = null;
+    if (ttl && ttl > 0) {
+      expiresAt = new Date(Date.now() + ttl);
+      this.logger.log(`File will expire at: ${expiresAt.toISOString()}`);
+    }
+
     // Create file record immediately
     const savedFile = await this.prisma.file.create({
       data: {
@@ -584,6 +607,7 @@ export class UploadService implements OnModuleInit {
         arkivAddress: 'pending', // Will be updated when first chunk completes
         userId,
         uploadStatus: 'uploading',
+        expiresAt,
         chunks: {
           create: chunks.map((chunk, index) => ({
             chunkIndex: index,
@@ -683,6 +707,9 @@ export class UploadService implements OnModuleInit {
     if (!file) {
       throw new Error('File not found');
     }
+
+    // Check if file has expired
+    this.checkFileExpiration(file);
 
     // If requested, retrieve actual data from Arkiv
     if (includeData && this.publicClient) {
@@ -803,6 +830,9 @@ export class UploadService implements OnModuleInit {
       throw new Error('File not found');
     }
 
+    // Check if file has expired
+    this.checkFileExpiration(file);
+
     if (!this.publicClient) {
       throw new Error('Arkiv client not initialized');
     }
@@ -889,6 +919,9 @@ export class UploadService implements OnModuleInit {
       throw new Error('File not found');
     }
 
+    // Check if file has expired
+    this.checkFileExpiration(file);
+
     // Verify it's a text-based file
     const isTextFile = file.mimeType.startsWith('text/') ||
       file.mimeType.includes('json') ||
@@ -961,6 +994,9 @@ export class UploadService implements OnModuleInit {
     if (!file) {
       throw new Error('File not found');
     }
+
+    // Check if file has expired
+    this.checkFileExpiration(file);
 
     if (!file.mimeType.includes('json')) {
       throw new Error('File is not a JSON file');

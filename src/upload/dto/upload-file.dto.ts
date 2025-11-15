@@ -1,5 +1,5 @@
-import { IsOptional, IsString, IsBoolean } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsOptional, IsString, IsBoolean, IsNumber, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UploadFileDto {
@@ -38,4 +38,15 @@ export class UploadFileDto {
   })
   @IsBoolean()
   enableDashStreaming?: boolean = false;
+
+  @ApiPropertyOptional({
+    description: 'Tiempo de vida del archivo en milisegundos (TTL). Después de este tiempo el archivo expirará.',
+    example: 86400000,
+    minimum: 60000,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(60000, { message: 'El TTL debe ser al menos 60000ms (1 minuto)' })
+  ttl?: number;
 }

@@ -118,15 +118,16 @@ enum TournamentStatus {
 }
 
 model File {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   originalName String
   mimeType     String
   size         Int
-  encoding     String   @default("base64")
+  encoding     String    @default("base64")
   arkivAddress String? // Dirección principal si el archivo es pequeño
-  uploadStatus String   @default("pending") // pending, uploading, completed, partial, failed
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  uploadStatus String    @default("pending") // pending, uploading, completed, partial, failed
+  expiresAt    DateTime? // Fecha de expiración del archivo (TTL)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   // DASH Streaming fields
   isDashVideo      Boolean @default(false) // Indica si es un video convertido a DASH

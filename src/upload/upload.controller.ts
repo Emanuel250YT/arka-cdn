@@ -90,6 +90,12 @@ export class UploadController {
           default: false,
           example: false,
         },
+        ttl: {
+          type: 'number',
+          description: 'Time to live in milliseconds (TTL). File will expire after this time.',
+          example: 86400000,
+          minimum: 60000,
+        },
       },
       required: ['file'],
     },
@@ -138,9 +144,10 @@ export class UploadController {
     try {
       this.logger.log(`User ${userId} uploading file: ${file.originalname}`);
 
-      // Determinar si se debe usar DASH streaming
+      // DASH streaming temporalmente deshabilitado
       const isVideo = file.mimetype.startsWith('video/');
-      const useDashStreaming = isVideo && uploadFileDto.enableDashStreaming;
+      const useDashStreaming = false; // Deshabilitado temporalmente
+      // const useDashStreaming = isVideo && uploadFileDto.enableDashStreaming;
 
       let result;
 
@@ -158,6 +165,7 @@ export class UploadController {
           file,
           userId,
           shouldCompress,
+          uploadFileDto.ttl,
         );
       }
 
@@ -531,7 +539,9 @@ export class UploadController {
   }
 
   // ===== DASH VIDEO STREAMING ENDPOINTS =====
+  // TEMPORALMENTE DESHABILITADOS
 
+  /*
   @Post('video/dash')
   @ApiOperation({
     summary: 'Upload video with DASH conversion',
@@ -742,6 +752,7 @@ export class UploadController {
       );
     }
   }
+  */
 
   @Get('stats/wallet-pool')
   @ApiOperation({
