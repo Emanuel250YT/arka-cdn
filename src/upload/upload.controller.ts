@@ -742,25 +742,25 @@ export class UploadController {
 
   @Get('stats/wallet-pool')
   @ApiOperation({
-    summary: 'Get wallets statistics',
-    description: 'Get information about configured wallets',
+    summary: 'Get upload pool statistics',
+    description: 'Get information about upload pool queues, wallets, and processing status',
   })
   @ApiResponse({
     status: 200,
-    description: 'Wallets statistics',
+    description: 'Upload pool statistics',
   })
   @ApiResponse({ status: 401, description: 'No autorizado' })
   async getWalletPoolStats() {
     try {
-      const stats = this.uploadService.getWalletsStats();
+      const stats = this.uploadService.getPoolStats();
       return {
         success: true,
         data: stats,
       };
     } catch (error) {
-      this.logger.error('Get wallets stats error:', error);
+      this.logger.error('Get pool stats error:', error);
       throw new BadRequestException(
-        error.message || 'Failed to get wallets statistics',
+        error.message || 'Failed to get pool statistics',
       );
     }
   }

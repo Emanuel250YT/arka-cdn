@@ -2,6 +2,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DashConverterService } from './dash-converter.service';
+import { UploadPoolService } from './upload-pool.service';
 import { createWalletClient, createPublicClient } from '@arkiv-network/sdk';
 import { http } from '@arkiv-network/sdk';
 import { privateKeyToAccount } from '@arkiv-network/sdk/accounts';
@@ -31,6 +32,7 @@ export class UploadService implements OnModuleInit {
   constructor(
     private prisma: PrismaService,
     private dashConverter: DashConverterService,
+    private uploadPool: UploadPoolService,
   ) { }
 
   async onModuleInit() {
@@ -367,7 +369,7 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Upload chunks in background
+   * Upload chunks in background using Upload Pool
    */
   private async uploadInBackground(
     chunks: Buffer[],
@@ -378,59 +380,73 @@ export class UploadService implements OnModuleInit {
       fileId: string;
     },
   ): Promise<void> {
-    const totalChunks = chunks.length;
-    this.logger.log(`Starting background upload of ${totalChunks} chunks for file ${metadata.fileId}`);
-    this.logger.log(`Load balancing: ${this.walletClients.length} wallet(s) using round-robin distribution`);
+    // Delegate to UploadPoolService for sequential processing per wallet
+    await this.uploadPool.addChunks(chunks, metadata);
 
-    try {
-      // Distribute chunks among wallets
-      const uploadPromises = chunks.map((chunk, index) => {
-        const wallet = this.getNextWallet();
-        this.logger.debug(`Chunk ${index + 1}/${totalChunks} assigned to wallet: ${wallet.account.address}`);
-        return this.uploadChunkToArkiv(
-          chunk,
-          {
-            ...metadata,
-            size: chunk.length,
-            chunkIndex: index,
-            totalChunks,
-          },
-          wallet
-        );
+    // Monitor upload status asynchronously
+    this.monitorUploadStatus(metadata.fileId, chunks.length).catch((error) => {
+      this.logger.error(`Failed to monitor upload status for file ${metadata.fileId}:`, error);
+    });
+  }
+
+  /**
+   * Monitor upload status and update file status when complete
+   */
+  private async monitorUploadStatus(fileId: string, totalChunks: number): Promise<void> {
+    const checkInterval = 5000; // Check every 5 seconds
+    const maxChecks = 720; // Max 1 hour (720 * 5s)
+    let checks = 0;
+
+    while (checks < maxChecks) {
+      await this.sleep(checkInterval);
+      checks++;
+
+      const chunks = await this.prisma.fileChunk.findMany({
+        where: { fileId },
       });
 
-      // Wait for all chunks to upload
-      const results = await Promise.allSettled(uploadPromises);
+      const completed = chunks.filter((c) => c.uploadStatus === 'completed').length;
+      const failed = chunks.filter((c) => c.uploadStatus === 'failed').length;
+      const pending = chunks.filter((c) =>
+        c.uploadStatus === 'pending' || c.uploadStatus === 'retrying'
+      ).length;
 
-      // Check results
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
+      this.logger.debug(
+        `[Monitor] File ${fileId}: ${completed}/${totalChunks} completed, ${failed} failed, ${pending} pending`
+      );
 
-      if (failed > 0) {
-        this.logger.error(
-          `Upload completed with errors: ${successful}/${totalChunks} successful, ${failed} failed`
-        );
-
-        await this.prisma.file.update({
-          where: { id: metadata.fileId },
-          data: { uploadStatus: 'partial' },
-        });
-      } else {
-        this.logger.log(`All ${totalChunks} chunks uploaded successfully for file ${metadata.fileId}`);
-
-        await this.prisma.file.update({
-          where: { id: metadata.fileId },
-          data: { uploadStatus: 'completed' },
-        });
+      // All chunks processed
+      if (pending === 0) {
+        if (failed > 0) {
+          await this.prisma.file.update({
+            where: { id: fileId },
+            data: { uploadStatus: 'partial' },
+          });
+          this.logger.warn(`File ${fileId} upload completed with ${failed} failed chunk(s)`);
+        } else {
+          await this.prisma.file.update({
+            where: { id: fileId },
+            data: { uploadStatus: 'completed' },
+          });
+          this.logger.log(`File ${fileId} upload completed successfully`);
+        }
+        return;
       }
-    } catch (error) {
-      this.logger.error(`Background upload failed for file ${metadata.fileId}:`, error);
-
-      await this.prisma.file.update({
-        where: { id: metadata.fileId },
-        data: { uploadStatus: 'failed' },
-      });
     }
+
+    // Timeout
+    this.logger.error(`Upload monitoring timed out for file ${fileId}`);
+    await this.prisma.file.update({
+      where: { id: fileId },
+      data: { uploadStatus: 'failed' },
+    });
+  }
+
+  /**
+   * Helper: sleep for ms
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -1116,14 +1132,21 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Get wallets statistics
+   * Get upload pool statistics
+   */
+  getPoolStats() {
+    return this.uploadPool.getPoolStats();
+  }
+
+  /**
+   * Get wallets statistics (legacy method, use getPoolStats instead)
    */
   getWalletsStats() {
     return {
       totalWallets: this.walletClients.length,
       currentWalletIndex: this.currentWalletIndex,
       nextWalletAddress: this.walletClients[this.currentWalletIndex]?.account?.address || 'N/A',
-      loadBalancing: 'round-robin',
+      loadBalancing: 'sequential (via upload pool)',
       wallets: this.walletClients.map((client, index) => ({
         index: index + 1,
         address: client.account.address,
