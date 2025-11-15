@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arka CDN - Public File Viewer</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    .container {
+      background: white;
+      border-radius: 8px;
+      padding: 30px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 30px;
+    }
+
+    .input-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #333;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .preview-area {
+      margin-top: 30px;
+      padding: 20px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      min-height: 200px;
+    }
+
+    .preview-area img,
+    .preview-area video,
+    .preview-area audio {
+      max-width: 100%;
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .file-info {
+      background: #e3f2fd;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      font-family: monospace;
+      font-size: 13px;
+    }
+
+    .error {
+      background: #ffebee;
+      color: #c62828;
+      padding: 15px;
+      border-radius: 4px;
+      margin-top: 15px;
+    }
+
+    .success {
+      background: #e8f5e9;
+      color: #2e7d32;
+      padding: 15px;
+      border-radius: 4px;
+      margin-top: 15px;
+    }
+
+    .code-block {
+      background: #263238;
+      color: #aed581;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      margin-top: 10px;
+    }
+
+    .examples {
+      margin-top: 40px;
+      padding-top: 30px;
+      border-top: 2px solid #eee;
+    }
+
+    .example-item {
+      margin-bottom: 20px;
+    }
+
+    .example-title {
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🚀 Arkiv CDN - Public File Viewer</h1>
+    <p class="subtitle">Retrieve and view files stored on Arkiv Network by their UUID</p>
+
+    <div class="input-group">
+      <label for="fileUuid">File UUID:</label>
+      <input type="text" id="fileUuid" placeholder="550e8400-e29b-41d4-a716-446655440000" />
+    </div>
+
+    <button onclick="loadFile()" id="loadBtn">Load File</button>
+
+    <div id="preview" class="preview-area" style="display: none;">
+      <div id="fileInfo" class="file-info"></div>
+      <div id="fileContent"></div>
+    </div>
+
+    <div class="examples">
+      <h2>Usage Examples</h2>
+
+      <div class="example-item">
+        <div class="example-title">1. Direct Image Embedding:</div>
+        <div class="code-block">&lt;img src="http://localhost:3000/data/YOUR-UUID" /&gt;</div>
+      </div>
+
+      <div class="example-item">
+        <div class="example-title">2. Video Player:</div>
+        <div class="code-block">&lt;video controls&gt;
+          &lt;source src="http://localhost:3000/data/YOUR-UUID" type="video/mp4"&gt;
+          &lt;/video&gt;</div>
+      </div>
+
+      <div class="example-item">
+        <div class="example-title">3. Download Link:</div>
+        <div class="code-block">&lt;a href="http://localhost:3000/data/YOUR-UUID" download&gt;Download File&lt;/a&gt;</div>
+      </div>
+
+      <div class="example-item">
+        <div class="example-title">4. JavaScript Fetch:</div>
+        <div class="code-block">const response = await fetch('http://localhost:3000/data/YOUR-UUID');
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          // Use url in img.src, video.src, etc.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadFile() {
+      const uuid = document.getElementById('fileUuid').value.trim();
+      const previewArea = document.getElementById('preview');
+      const fileInfo = document.getElementById('fileInfo');
+      const fileContent = document.getElementById('fileContent');
+      const loadBtn = document.getElementById('loadBtn');
+
+      if (!uuid) {
+        alert('Please enter a file UUID');
+        return;
+      }
+
+      // Clear previous content
+      fileContent.innerHTML = '';
+      fileInfo.innerHTML = '';
+
+      // Show loading state
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Loading...';
+
+      try {
+        const apiUrl = `http://localhost:3000/data/${uuid}`;
+        const response = await fetch(apiUrl);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // Get metadata from headers
+        const contentType = response.headers.get('content-type');
+        const contentLength = response.headers.get('content-length');
+        const contentDisposition = response.headers.get('content-disposition');
+
+        // Extract filename
+        const filenameMatch = contentDisposition?.match(/filename="(.+)"/);
+        const filename = filenameMatch ? filenameMatch[1] : 'unknown';
+
+        // Display file info
+        fileInfo.innerHTML = `
+                    <strong>File Information:</strong><br>
+                    Name: ${filename}<br>
+                    Type: ${contentType}<br>
+                    Size: ${(parseInt(contentLength) / 1024).toFixed(2)} KB<br>
+                    URL: <a href="${apiUrl}" target="_blank">${apiUrl}</a>
+                `;
+
+        // Get blob
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+
+        // Display based on content type
+        if (contentType.startsWith('image/')) {
+          fileContent.innerHTML = `<img src="${blobUrl}" alt="${filename}" />`;
+        } else if (contentType.startsWith('video/')) {
+          fileContent.innerHTML = `
+                        <video controls>
+                            <source src="${blobUrl}" type="${contentType}">
+                        </video>
+                    `;
+        } else if (contentType.startsWith('audio/')) {
+          fileContent.innerHTML = `
+                        <audio controls>
+                            <source src="${blobUrl}" type="${contentType}">
+                        </audio>
+                    `;
+        } else if (contentType.startsWith('text/') || contentType === 'application/json') {
+          const text = await blob.text();
+          fileContent.innerHTML = `<pre style="max-height: 400px; overflow: auto; background: #f5f5f5; padding: 15px; border-radius: 4px;">${escapeHtml(text)}</pre>`;
+        } else if (contentType === 'application/pdf') {
+          fileContent.innerHTML = `
+                        <embed src="${blobUrl}" type="application/pdf" width="100%" height="600px" />
+                        <p><a href="${blobUrl}" download="${filename}">Download PDF</a></p>
+                    `;
+        } else {
+          fileContent.innerHTML = `
+                        <div class="success">
+                            File loaded successfully!<br>
+                            <a href="${blobUrl}" download="${filename}" style="color: #2e7d32; font-weight: bold;">Download ${filename}</a>
+                        </div>
+                    `;
+        }
+
+        previewArea.style.display = 'block';
+      } catch (error) {
+        fileContent.innerHTML = `
+                    <div class="error">
+                        <strong>Error loading file:</strong><br>
+                        ${error.message}
+                    </div>
+                `;
+        previewArea.style.display = 'block';
+      } finally {
+        loadBtn.disabled = false;
+        loadBtn.textContent = 'Load File';
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Allow Enter key to load file
+    document.getElementById('fileUuid').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        loadFile();
+      }
+    });
+  </script>
+</body>
+
+</html>
