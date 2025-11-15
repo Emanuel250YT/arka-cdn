@@ -1,4 +1,5 @@
 import { IsOptional, IsString, IsBoolean } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UploadFileDto {
@@ -16,6 +17,11 @@ export class UploadFileDto {
     example: true,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   @IsBoolean()
   compress?: boolean = true;
 
@@ -25,6 +31,11 @@ export class UploadFileDto {
     example: false,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   @IsBoolean()
   enableDashStreaming?: boolean = false;
 }

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
   Post,
@@ -149,10 +150,11 @@ export class UploadController {
         );
       } else {
         // Upload normal con o sin compresión
+        const shouldCompress = uploadFileDto.compress === true || uploadFileDto.compress === undefined;
         result = await this.uploadService.uploadFile(
           file,
           userId,
-          uploadFileDto.compress !== false, // Por defecto true
+          shouldCompress,
         );
       }
 

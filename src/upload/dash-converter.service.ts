@@ -153,43 +153,50 @@ export class DashConverterService {
     return new Promise((resolve, reject) => {
       const command = Ffmpeg(inputPath);
 
-      // Configurar outputs para cada resolución
+      // Build complex filter for multiple resolutions
+      const videoMaps = [];
+      const filterComplex = [];
+
       resolutions.forEach((resolution, index) => {
         const config = this.RESOLUTION_MAP[resolution];
-        const outputPattern = join(outputDir, `${resolution}_segment_%03d.m4s`);
-        const initSegment = join(outputDir, `${resolution}_init.mp4`);
-
-        command
-          .output(outputPattern)
-          .outputOptions([
-            `-vf scale=${config.width}:${config.height}`,
-            `-b:v ${config.bitrate}`,
-            '-c:v libx264',
-            '-preset fast',
-            '-profile:v high',
-            '-level 4.1',
-            '-c:a aac',
-            '-b:a 128k',
-            '-ar 48000',
-            '-f dash',
-            `-seg_duration 4`, // Segmentos de 4 segundos
-            `-init_seg_name ${resolution}_init.mp4`,
-            '-use_template 1',
-            '-use_timeline 1',
-            '-adaptation_sets "id=0,streams=v id=1,streams=a"',
-          ]);
+        filterComplex.push(
+          `[0:v]scale=${config.width}:${config.height}[v${index}]`
+        );
+        videoMaps.push(`-map [v${index}]`);
       });
 
-      // Generar manifest MPD
+      // Add audio stream mapping
+      videoMaps.push('-map 0:a');
+
+      const manifestPath = join(outputDir, 'manifest.mpd');
+
       command
-        .output(join(outputDir, 'manifest.mpd'))
         .outputOptions([
+          '-filter_complex',
+          filterComplex.join(';'),
+          ...videoMaps,
+          '-c:v libx264',
+          '-preset fast',
+          '-profile:v high',
+          '-level 4.1',
+          '-c:a aac',
+          '-b:a 128k',
+          '-ar 48000',
           '-f dash',
           '-seg_duration 4',
           '-use_template 1',
           '-use_timeline 1',
-          '-adaptation_sets "id=0,streams=v id=1,streams=a"',
-        ]);
+          '-adaptation_sets id=0,streams=v id=1,streams=a',
+          '-init_seg_name init-stream$RepresentationID$.m4s',
+          '-media_seg_name chunk-stream$RepresentationID$-$Number%05d$.m4s',
+        ])
+        .output(manifestPath);
+
+      // Set bitrates for each video stream
+      resolutions.forEach((resolution, index) => {
+        const config = this.RESOLUTION_MAP[resolution];
+        command.outputOptions([`-b:v:${index}`, config.bitrate]);
+      });
 
       command
         .on('end', () => {
@@ -222,30 +229,14 @@ export class DashConverterService {
     const segments = [];
     const files = await readdir(workDir);
 
-    for (const resolution of resolutions) {
-      // Buscar segmentos de esta resolución
-      const segmentFiles = files.filter(
-        (f) => f.startsWith(`${resolution}_segment_`) && f.endsWith('.m4s'),
-      );
+    // DASH generates files with pattern: init-stream{X}.m4s and chunk-stream{X}-{N}.m4s
+    // where X is the stream/representation ID (0-based index)
 
-      for (const segmentFile of segmentFiles) {
-        const fullPath = join(workDir, segmentFile);
-        const stats = await readFile(fullPath);
+    for (let streamIndex = 0; streamIndex < resolutions.length; streamIndex++) {
+      const resolution = resolutions[streamIndex];
 
-        // Extraer el índice del nombre del archivo
-        const match = segmentFile.match(/_segment_(\d+)\.m4s$/);
-        const index = match ? parseInt(match[1], 10) : 0;
-
-        segments.push({
-          path: fullPath,
-          resolution,
-          index,
-          size: stats.length,
-        });
-      }
-
-      // Agregar el segmento de inicialización
-      const initFile = `${resolution}_init.mp4`;
+      // Buscar segmentos de inicialización
+      const initFile = `init-stream${streamIndex}.m4s`;
       if (files.includes(initFile)) {
         const fullPath = join(workDir, initFile);
         const stats = await readFile(fullPath);
@@ -257,6 +248,58 @@ export class DashConverterService {
           size: stats.length,
         });
       }
+
+      // Buscar chunks de este stream
+      const chunkPattern = new RegExp(`^chunk-stream${streamIndex}-(\\d+)\\.m4s$`);
+      const chunkFiles = files.filter((f) => chunkPattern.test(f));
+
+      for (const chunkFile of chunkFiles) {
+        const fullPath = join(workDir, chunkFile);
+        const stats = await readFile(fullPath);
+
+        // Extraer el índice del nombre del archivo
+        const match = chunkFile.match(chunkPattern);
+        const index = match ? parseInt(match[1], 10) : 0;
+
+        segments.push({
+          path: fullPath,
+          resolution,
+          index,
+          size: stats.length,
+        });
+      }
+    }
+
+    // También incluir segmentos de audio si existen
+    const audioInitFile = `init-stream${resolutions.length}.m4s`;
+    if (files.includes(audioInitFile)) {
+      const fullPath = join(workDir, audioInitFile);
+      const stats = await readFile(fullPath);
+
+      segments.push({
+        path: fullPath,
+        resolution: 'audio',
+        index: -1,
+        size: stats.length,
+      });
+    }
+
+    const audioChunkPattern = new RegExp(`^chunk-stream${resolutions.length}-(\\d+)\\.m4s$`);
+    const audioChunks = files.filter((f) => audioChunkPattern.test(f));
+
+    for (const chunkFile of audioChunks) {
+      const fullPath = join(workDir, chunkFile);
+      const stats = await readFile(fullPath);
+
+      const match = chunkFile.match(audioChunkPattern);
+      const index = match ? parseInt(match[1], 10) : 0;
+
+      segments.push({
+        path: fullPath,
+        resolution: 'audio',
+        index,
+        size: stats.length,
+      });
     }
 
     return segments;

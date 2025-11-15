@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DashConverterService } from './dash-converter.service';
@@ -18,7 +19,7 @@ export class UploadService implements OnModuleInit {
   private readonly logger = new Logger(UploadService.name);
   private arkivClient: any;
   private publicClient: any;
-  private readonly CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+  private readonly CHUNK_SIZE = 64 * 1024; // 16KB chunks
   private readonly MAX_IMAGE_WIDTH = 1920; // 1080p width
   private readonly MAX_IMAGE_HEIGHT = 1080; // 1080p height
   private readonly IMAGE_QUALITY = 80; // Calidad de compresión
@@ -635,12 +636,40 @@ export class UploadService implements OnModuleInit {
       // Subir manifest a Arkiv
       this.logger.log('Uploading DASH manifest to Arkiv...');
       const manifestBuffer = Buffer.from(dashResult.manifestContent, 'utf-8');
-      const manifestUpload = await this.uploadToArkiv(manifestBuffer, {
-        fileName: `${file.originalname}.mpd`,
-        mimeType: 'application/dash+xml',
-        size: manifestBuffer.length,
-        userId,
-      });
+
+      let manifestAddress: string;
+
+      // Si el manifest es mayor a 16KB, dividirlo en chunks
+      if (manifestBuffer.length > this.CHUNK_SIZE) {
+        this.logger.log(`Manifest is ${manifestBuffer.length} bytes, splitting into chunks...`);
+
+        const manifestChunks = this.chunkBuffer(manifestBuffer, this.CHUNK_SIZE);
+        const manifestChunkAddresses: string[] = [];
+
+        for (let i = 0; i < manifestChunks.length; i++) {
+          const chunkUpload = await this.uploadToArkiv(manifestChunks[i], {
+            fileName: `${file.originalname}.mpd_chunk${i}`,
+            mimeType: 'application/dash+xml',
+            size: manifestChunks[i].length,
+            chunkIndex: i,
+            totalChunks: manifestChunks.length,
+            userId,
+          });
+          manifestChunkAddresses.push(chunkUpload.entityKey);
+        }
+
+        manifestAddress = manifestChunkAddresses[0]; // Primera dirección como referencia
+        this.logger.log(`Manifest uploaded in ${manifestChunks.length} chunks`);
+      } else {
+        // Manifest pequeño, subir directamente
+        const manifestUpload = await this.uploadToArkiv(manifestBuffer, {
+          fileName: `${file.originalname}.mpd`,
+          mimeType: 'application/dash+xml',
+          size: manifestBuffer.length,
+          userId,
+        });
+        manifestAddress = manifestUpload.entityKey;
+      }
 
       // Subir todos los segmentos a Arkiv
       this.logger.log(
@@ -650,25 +679,70 @@ export class UploadService implements OnModuleInit {
 
       for (const segment of dashResult.segments) {
         const segmentBuffer = await readFile(segment.path);
-        const segmentUpload = await this.uploadToArkiv(segmentBuffer, {
-          fileName: `${file.originalname}_${segment.resolution}_${segment.index}`,
-          mimeType: 'video/mp4',
-          size: segment.size,
-          userId,
-        });
 
-        segmentRecords.push({
-          segmentIndex: segment.index,
-          resolution: segment.resolution,
-          arkivAddress: segmentUpload.entityKey,
-          duration: 4, // Duración del segmento (configurable)
-          size: segment.size,
-          txHash: segmentUpload.txHash,
-        });
+        // Si el segmento es mayor a 16KB, dividirlo en chunks
+        if (segmentBuffer.length > this.CHUNK_SIZE) {
+          this.logger.log(
+            `Segment ${segment.index} (${segment.resolution}) is ${segmentBuffer.length} bytes, splitting into chunks...`,
+          );
 
-        this.logger.log(
-          `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
-        );
+          const chunks = this.chunkBuffer(segmentBuffer, this.CHUNK_SIZE);
+          const chunkAddresses: string[] = [];
+          const chunkData = [];
+
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkUpload = await this.uploadToArkiv(chunks[i], {
+              fileName: `${file.originalname}_${segment.resolution}_${segment.index}_chunk${i}`,
+              mimeType: 'video/mp4',
+              size: chunks[i].length,
+              chunkIndex: i,
+              totalChunks: chunks.length,
+              userId,
+            });
+
+            chunkAddresses.push(chunkUpload.entityKey);
+            chunkData.push({
+              chunkIndex: i,
+              arkivAddress: chunkUpload.entityKey,
+              size: chunks[i].length,
+              txHash: chunkUpload.txHash,
+            });
+          }
+
+          segmentRecords.push({
+            segmentIndex: segment.index,
+            resolution: segment.resolution,
+            arkivAddress: chunkAddresses[0], // Primera dirección como referencia
+            duration: 4,
+            size: segment.size,
+            txHash: chunkData[0].txHash,
+          });
+
+          this.logger.log(
+            `Uploaded segment ${segment.index} (${segment.resolution}) in ${chunks.length} chunks`,
+          );
+        } else {
+          // Segmento pequeño, subir directamente
+          const segmentUpload = await this.uploadToArkiv(segmentBuffer, {
+            fileName: `${file.originalname}_${segment.resolution}_${segment.index}`,
+            mimeType: 'video/mp4',
+            size: segment.size,
+            userId,
+          });
+
+          segmentRecords.push({
+            segmentIndex: segment.index,
+            resolution: segment.resolution,
+            arkivAddress: segmentUpload.entityKey,
+            duration: 4,
+            size: segment.size,
+            txHash: segmentUpload.txHash,
+          });
+
+          this.logger.log(
+            `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
+          );
+        }
       }
 
       // Actualizar el registro del archivo con toda la información
@@ -676,11 +750,11 @@ export class UploadService implements OnModuleInit {
         where: { id: fileRecord.id },
         data: {
           dashManifest: dashResult.manifestContent,
-          dashManifestUrl: manifestUpload.entityKey,
+          dashManifestUrl: manifestAddress,
           videoDuration: dashResult.duration,
           videoResolutions: JSON.stringify(dashResult.resolutions),
           processingStatus: 'completed',
-          arkivAddress: manifestUpload.entityKey,
+          arkivAddress: manifestAddress,
           videoSegments: {
             create: segmentRecords,
           },
@@ -693,7 +767,7 @@ export class UploadService implements OnModuleInit {
 
       return {
         fileId: fileRecord.id,
-        manifestUrl: manifestUpload.entityKey,
+        manifestUrl: manifestAddress,
         duration: dashResult.duration,
         resolutions: dashResult.resolutions,
         totalSegments: dashResult.segments.length,

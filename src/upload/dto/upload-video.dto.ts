@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { IsOptional, IsBoolean, IsArray, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UploadVideoDto {
@@ -17,6 +18,11 @@ export class UploadVideoDto {
     example: true,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   @IsBoolean()
   enableDash?: boolean = true;
 
@@ -38,6 +44,11 @@ export class UploadVideoDto {
     example: true,
   })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   @IsBoolean()
   compress?: boolean = true;
 }
