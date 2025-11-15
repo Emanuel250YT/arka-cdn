@@ -3,8 +3,6 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { AuthModule } from './auth/auth.module';
-import { UploadModule } from './upload/upload.module';
 import * as express from 'express';
 
 async function bootstrap() {
@@ -31,55 +29,24 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger configuration
-  try {
-    const config = new DocumentBuilder()
-      .setTitle('Arka CDN - Arkiv Network Storage API')
-      .setDescription(
-        'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
-      )
-      .setVersion('1.0')
-      .addTag('health', 'Health check endpoints')
-      .addTag('auth', 'Autenticación y gestión de usuarios')
-      .addTag('users', 'Gestión de usuarios')
-      .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
-      .addTag('blockchain', 'Interacción con smart contracts')
-      .addBearerAuth()
-      .build();
-    let document;
-    try {
-      document = SwaggerModule.createDocument(app, config, {
-        deepScanRoutes: true,
-        include: [AuthModule, UploadModule, AppModule],
-        operationIdFactory: (controllerKey: string, methodKey: string) =>
-          `${controllerKey?.replace?.(/Controller$/, '') ?? 'Controller'}_${methodKey}`,
-      });
-    } catch (innerErr) {
-      // Fallback: create with default options if advanced options fail
-      // eslint-disable-next-line no-console
-      console.warn('Swagger advanced options failed, retrying with defaults:', (innerErr as Error)?.message);
-      // Try progressively narrower includes to isolate faulty module
-      try {
-        document = SwaggerModule.createDocument(app, config, { include: [AuthModule] });
-      } catch (authErr) {
-        // eslint-disable-next-line no-console
-        console.warn('Swagger failed on AuthModule too:', (authErr as Error)?.message);
-        document = SwaggerModule.createDocument(app, config);
-      }
-    }
 
-    SwaggerModule.setup('api/docs', app, document, {
-      customSiteTitle: 'Arka CDN API Docs',
-      customfavIcon: 'https://nestjs.com/img/logo-small.svg',
-      customCss: '.swagger-ui .topbar { display: none }',
-    });
-  } catch (err) {
-    // Do not crash the app if Swagger fails in certain environments
-    // eslint-disable-next-line no-console
-    console.warn('Swagger initialization skipped:', (err as Error)?.message);
-    // eslint-disable-next-line no-console
-    if ((err as Error)?.stack) console.warn((err as Error).stack);
-  }
+  const config = new DocumentBuilder()
+    .setTitle('Arka CDN - Arkiv Network Storage API')
+    .setDescription(
+      'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
+    )
+    .setVersion('1.0')
+    .addTag('health', 'Health check endpoints')
+    .addTag('auth', 'Autenticación y gestión de usuarios')
+    .addTag('users', 'Gestión de usuarios')
+    .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
+    .addTag('blockchain', 'Interacción con smart contracts')
+    .addBearerAuth()
+    .build();
+
+
+  const documentFactory = () => SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, documentFactory);
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
