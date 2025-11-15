@@ -124,6 +124,7 @@ model File {
   size         Int
   encoding     String   @default("base64")
   arkivAddress String? // Dirección principal si el archivo es pequeño
+  uploadStatus String   @default("pending") // pending, uploading, completed, partial, failed
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -147,9 +148,11 @@ model File {
 model FileChunk {
   id           String   @id @default(uuid())
   chunkIndex   Int
-  arkivAddress String
+  arkivAddress String   @default("pending")
   size         Int
   txHash       String? // Transaction hash from Arkiv
+  uploadStatus String   @default("pending") // pending, uploading, retrying, completed, failed
+  retryCount   Int      @default(0)
   createdAt    DateTime @default(now())
 
   fileId String

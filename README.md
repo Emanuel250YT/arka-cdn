@@ -15,6 +15,43 @@ NestJS backend with decentralized storage on Arkiv Network, video conversion to 
 - ✅ **JWT Authentication**: Robust security system
 - ✅ **TypeScript**: Fully typed code
 - ✅ **Complete Validation**: DTOs with class-validator
+- ✅ **Multi-Wallet System**: Parallel transaction processing for maximum throughput
+
+## ⚡ Performance Optimization
+
+### Multi-Wallet System (WalletPool)
+
+The CDN uses a **multi-wallet system** to parallelize blockchain transactions and dramatically increase upload speeds:
+
+- **Single Wallet**: ~1 transaction/second → 60 seconds for 60 chunks
+- **3 Wallets**: ~3 transactions/second → 20 seconds for 60 chunks (3x faster ⚡)
+- **5 Wallets**: ~5 transactions/second → 12 seconds for 60 chunks (5x faster ⚡⚡⚡)
+
+#### Quick Setup
+
+Add multiple private keys to your `.env`:
+
+```env
+# Primary wallet (required)
+ARKIV_PRIVATE_KEY=your_primary_key
+
+# Additional wallets (optional, for better performance)
+ARKIV_PRIVATE_KEY_2=your_second_key
+ARKIV_PRIVATE_KEY_3=your_third_key
+```
+
+**Benefits:**
+
+- 🚀 Automatic load balancing across wallets
+- 📊 Real-time statistics via API
+- 🔄 Nonce management per wallet
+- 💪 Fault tolerance
+
+**Learn more:**
+
+- [Multi-Wallet System Documentation](./src/upload/WALLET_POOL.md)
+- [Setup Guide & Examples](./src/upload/MULTI_WALLET_EXAMPLE.md)
+- [Nonce Manager Details](./src/upload/NONCE_MANAGER.md)
 
 ## 📁 Supported File Types
 

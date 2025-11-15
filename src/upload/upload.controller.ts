@@ -289,13 +289,14 @@ export class UploadController {
 
       return {
         success: true,
-        message: 'Plain text uploaded successfully',
+        message: 'Plain text upload started',
         data: {
           fileId: result.fileId,
           originalName: filename,
           size: buffer.length,
           mimeType: mimeType,
-          arkivAddresses: result.arkivAddresses,
+          status: result.status,
+          message: result.message,
         },
       };
     } catch (error) {
@@ -737,5 +738,80 @@ export class UploadController {
         error.message || 'Failed to get video streaming info',
       );
     }
+  }
+
+  @Get('stats/wallet-pool')
+  @ApiOperation({
+    summary: 'Get wallets statistics',
+    description: 'Get information about configured wallets',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Wallets statistics',
+  })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  async getWalletPoolStats() {
+    try {
+      const stats = this.uploadService.getWalletsStats();
+      return {
+        success: true,
+        data: stats,
+      };
+    } catch (error) {
+      this.logger.error('Get wallets stats error:', error);
+      throw new BadRequestException(
+        error.message || 'Failed to get wallets statistics',
+      );
+    }
+  }
+
+  @Get(':id/status')
+  @ApiOperation({
+    summary: 'Get upload status',
+    description: 'Get the current upload status of a file, including progress and chunk information',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'File ID',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload status retrieved successfully',
+  })
+  @ApiResponse({ status: 404, description: 'File not found' })
+  @ApiResponse({ status: 401, description: 'No autorizado' })
+  async getUploadStatus(
+    @Param('id') fileId: string,
+    @GetUser('id') userId: string,
+  ) {
+    try {
+      const status = await this.uploadService.getUploadStatus(fileId, userId);
+      return {
+        success: true,
+        data: status,
+      };
+    } catch (error) {
+      this.logger.error('Get upload status error:', error);
+      throw new BadRequestException(
+        error.message || 'Failed to get upload status',
+      );
+    }
+  }
+
+  @Post('stats/wallet-pool/reset')
+  @ApiOperation({
+    summary: 'No-op endpoint (deprecated)',
+    description: 'This endpoint is no longer needed',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'No action needed',
+  })
+  async resetWalletPool() {
+    return {
+      success: true,
+      message: 'No action needed - wallet reset not required in new system',
+    };
   }
 }

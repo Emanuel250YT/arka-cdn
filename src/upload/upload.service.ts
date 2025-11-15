@@ -13,12 +13,15 @@ import { writeFile, unlink, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes, randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
 
 @Injectable()
 export class UploadService implements OnModuleInit {
   private readonly logger = new Logger(UploadService.name);
   private arkivClient: any;
   private publicClient: any;
+  private walletClients: any[] = [];
+  private currentWalletIndex: number = 0;
   private readonly CHUNK_SIZE = 64 * 1024; // 16KB chunks
   private readonly MAX_IMAGE_WIDTH = 1920; // 1080p width
   private readonly MAX_IMAGE_HEIGHT = 1080; // 1080p height
@@ -32,14 +35,46 @@ export class UploadService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      // Initialize Arkiv client with private key from environment
-      const privateKey = process.env.ARKIV_PRIVATE_KEY;
-      if (!privateKey) {
-        throw new Error('ARKIV_PRIVATE_KEY is required in environment variables');
+      const privateKeys: string[] = [];
+
+      // Try to load wallets from wallets.json first
+      try {
+        // Allow overriding the wallets.json path via environment variable
+        const walletsFile = process.env.ARKIV_WALLETS_FILE || 'wallets.json';
+        const walletsPath = join(process.cwd(), walletsFile);
+        const walletsData = readFileSync(walletsPath, 'utf-8');
+        const parsed = JSON.parse(walletsData);
+
+        if (parsed.wallets && Array.isArray(parsed.wallets) && parsed.wallets.length > 0) {
+          parsed.wallets.forEach((wallet: any) => {
+            if (wallet.privateKey) {
+              privateKeys.push(wallet.privateKey);
+            }
+          });
+          this.logger.log(`Loaded ${privateKeys.length} wallet(s) from wallets.json`);
+        } else {
+          this.logger.warn('wallets.json exists but has no valid wallets');
+        }
+      } catch (error) {
+        this.logger.warn('Could not load wallets.json, falling back to environment variables');
       }
 
-      // Create account from private key
-      const account = privateKeyToAccount(`0x${privateKey.replace('0x', '')}`);
+      // If no wallets loaded from JSON, fallback to environment variables
+      if (privateKeys.length === 0) {
+        const primaryKey = process.env.ARKIV_PRIVATE_KEY;
+        if (!primaryKey) {
+          throw new Error('No wallets found in wallets.json and ARKIV_PRIVATE_KEY is not set in environment variables');
+        }
+        privateKeys.push(primaryKey);
+
+        // Get additional keys from environment
+        let keyIndex = 2;
+        while (process.env[`ARKIV_PRIVATE_KEY_${keyIndex}`]) {
+          privateKeys.push(process.env[`ARKIV_PRIVATE_KEY_${keyIndex}`]);
+          keyIndex++;
+        }
+        this.logger.log(`Loaded ${privateKeys.length} wallet(s) from environment variables`);
+      }
 
       // Create public client for reading
       this.publicClient = createPublicClient({
@@ -47,14 +82,23 @@ export class UploadService implements OnModuleInit {
         transport: http(),
       });
 
-      // Create wallet client for writing
-      this.arkivClient = createWalletClient({
-        chain: mendoza,
-        transport: http(),
-        account,
+      // Create wallet clients
+      this.walletClients = privateKeys.map((privateKey) => {
+        const account = privateKeyToAccount(`0x${privateKey.replace('0x', '')}`);
+        return createWalletClient({
+          chain: mendoza,
+          transport: http(),
+          account,
+        });
       });
 
-      this.logger.log('Arkiv clients initialized successfully');
+      // Set primary client
+      this.arkivClient = this.walletClients[0];
+
+      this.logger.log(`Arkiv clients initialized successfully with ${this.walletClients.length} wallet(s)`);
+      this.walletClients.forEach((client, index) => {
+        this.logger.log(`  Wallet ${index + 1}: ${client.account.address}`);
+      });
     } catch (error) {
       this.logger.error('Failed to initialize Arkiv client:', error);
       throw error;
@@ -177,75 +221,89 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Upload a single buffer to Arkiv using createEntity with retry logic
+   * Get next wallet in round-robin fashion
    */
-  private async uploadToArkiv(
+  private getNextWallet(): any {
+    const wallet = this.walletClients[this.currentWalletIndex];
+    this.currentWalletIndex = (this.currentWalletIndex + 1) % this.walletClients.length;
+    return wallet;
+  }
+
+  /**
+   * Upload a single chunk to Arkiv with retry logic (up to 10 retries)
+   */
+  private async uploadChunkToArkiv(
     buffer: Buffer,
     metadata: {
       fileName: string;
       mimeType: string;
       size: number;
-      chunkIndex?: number;
-      totalChunks?: number;
+      chunkIndex: number;
+      totalChunks: number;
       userId: string;
+      fileId: string;
     },
+    walletClient: any,
   ): Promise<{ entityKey: string; txHash: string }> {
-    const maxRetries = 5;
+    const maxRetries = 10;
     let retryCount = 0;
     let lastError: Error;
 
     while (retryCount < maxRetries) {
       try {
-        if (!this.arkivClient) {
-          throw new Error('Arkiv client not initialized');
-        }
-
         const entityId = randomUUID();
-        const isChunk = metadata.chunkIndex !== undefined;
 
         if (retryCount > 0) {
-          this.logger.log(`Retry attempt ${retryCount}/${maxRetries} for: ${isChunk ? `chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks}` : 'full file'}`);
-        } else {
-          this.logger.log(`Preparing to upload: ${isChunk ? `chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks}` : 'full file'}, size: ${metadata.size} bytes`);
+          this.logger.warn(
+            `Retry ${retryCount}/${maxRetries} for chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks} of ${metadata.fileName}`
+          );
         }
 
-        // Create entity with proper SDK methods
-        const result = await this.arkivClient.createEntity({
+        const result = await walletClient.createEntity({
           payload: jsonToPayload({
             entity: {
-              entityType: isChunk ? 'file-chunk' : 'file',
+              entityType: 'file-chunk',
               entityId,
               fileName: metadata.fileName,
               mimeType: metadata.mimeType,
               userId: metadata.userId,
               size: metadata.size,
               uploadedAt: Date.now(),
-              ...(isChunk && {
-                chunkIndex: metadata.chunkIndex,
-                totalChunks: metadata.totalChunks,
-              }),
+              chunkIndex: metadata.chunkIndex,
+              totalChunks: metadata.totalChunks,
             },
-            data: buffer.toString('base64'), // Convert buffer to base64 for JSON payload
+            data: buffer.toString('base64'),
           }),
           contentType: 'application/json',
           attributes: [
-            { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
+            { key: 'type', value: 'file-chunk' },
             { key: 'fileName', value: metadata.fileName },
             { key: 'mimeType', value: metadata.mimeType },
             { key: 'userId', value: metadata.userId },
-            ...(isChunk
-              ? [
-                { key: 'chunkIndex', value: metadata.chunkIndex.toString() },
-                { key: 'totalChunks', value: metadata.totalChunks.toString() },
-              ]
-              : []),
+            { key: 'chunkIndex', value: metadata.chunkIndex.toString() },
+            { key: 'totalChunks', value: metadata.totalChunks.toString() },
           ],
-          expiresIn: ExpirationTime.fromDays(30), // 30 days expiration
+          expiresIn: ExpirationTime.fromDays(30),
         });
 
         this.logger.log(
-          `Entity created on Arkiv - Key: ${result.entityKey}, TX: ${result.txHash}`,
+          `Chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks} uploaded - Key: ${result.entityKey}`
         );
+
+        // Update chunk in database
+        await this.prisma.fileChunk.update({
+          where: {
+            fileId_chunkIndex: {
+              fileId: metadata.fileId,
+              chunkIndex: metadata.chunkIndex,
+            },
+          },
+          data: {
+            arkivAddress: result.entityKey,
+            txHash: result.txHash,
+            uploadStatus: 'completed',
+          },
+        });
 
         return {
           entityKey: result.entityKey,
@@ -255,40 +313,128 @@ export class UploadService implements OnModuleInit {
         lastError = error;
         const errorMessage = error.message || String(error);
 
-        // Check if it's a nonce error or transaction error that can be retried
-        const isNonceError = errorMessage.includes('nonce too low') ||
-          errorMessage.includes('nonce too high') ||
-          errorMessage.includes('replacement transaction underpriced');
-
-        const isRetryableError = isNonceError ||
-          errorMessage.includes('timeout') ||
-          errorMessage.includes('network') ||
-          errorMessage.includes('connection');
-
-        if (isRetryableError && retryCount < maxRetries - 1) {
-          // Exponential backoff: 1s, 2s, 4s, 8s
-          const delayMs = Math.pow(2, retryCount) * 1000;
+        if (retryCount < maxRetries - 1) {
+          // Exponential backoff
+          const delayMs = Math.min(Math.pow(2, retryCount) * 1000, 30000); // Max 30s
           this.logger.warn(
-            `Retryable error (${isNonceError ? 'nonce issue' : 'network issue'}): ${errorMessage}. Retrying in ${delayMs}ms...`
+            `Error uploading chunk ${metadata.chunkIndex + 1}: ${errorMessage}. Retrying in ${delayMs}ms...`
           );
+
+          // Update chunk status to retrying
+          await this.prisma.fileChunk.update({
+            where: {
+              fileId_chunkIndex: {
+                fileId: metadata.fileId,
+                chunkIndex: metadata.chunkIndex,
+              },
+            },
+            data: {
+              uploadStatus: 'retrying',
+              retryCount: retryCount + 1,
+            },
+          }).catch(() => { }); // Ignore errors updating status
+
           await new Promise(resolve => setTimeout(resolve, delayMs));
           retryCount++;
           continue;
         }
 
-        // Non-retryable error or max retries reached
-        this.logger.error('Error uploading to Arkiv:', error);
-        this.logger.error('Error stack:', error.stack);
-        throw new Error(`Failed to upload to Arkiv after ${retryCount + 1} attempts: ${errorMessage}`);
+        // Max retries reached - mark as failed
+        this.logger.error(
+          `Failed to upload chunk ${metadata.chunkIndex + 1} after ${maxRetries} attempts: ${errorMessage}`
+        );
+
+        await this.prisma.fileChunk.update({
+          where: {
+            fileId_chunkIndex: {
+              fileId: metadata.fileId,
+              chunkIndex: metadata.chunkIndex,
+            },
+          },
+          data: {
+            uploadStatus: 'failed',
+            retryCount: maxRetries,
+          },
+        }).catch(() => { });
+
+        throw new Error(
+          `Failed to upload chunk after ${maxRetries} attempts: ${errorMessage}`
+        );
       }
     }
 
-    // Should never reach here, but just in case
-    throw new Error(`Failed to upload to Arkiv after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+    throw lastError;
   }
 
   /**
-   * Main upload function with compression and chunking
+   * Upload chunks in background
+   */
+  private async uploadInBackground(
+    chunks: Buffer[],
+    metadata: {
+      fileName: string;
+      mimeType: string;
+      userId: string;
+      fileId: string;
+    },
+  ): Promise<void> {
+    const totalChunks = chunks.length;
+    this.logger.log(`Starting background upload of ${totalChunks} chunks for file ${metadata.fileId}`);
+    this.logger.log(`Load balancing: ${this.walletClients.length} wallet(s) using round-robin distribution`);
+
+    try {
+      // Distribute chunks among wallets
+      const uploadPromises = chunks.map((chunk, index) => {
+        const wallet = this.getNextWallet();
+        this.logger.debug(`Chunk ${index + 1}/${totalChunks} assigned to wallet: ${wallet.account.address}`);
+        return this.uploadChunkToArkiv(
+          chunk,
+          {
+            ...metadata,
+            size: chunk.length,
+            chunkIndex: index,
+            totalChunks,
+          },
+          wallet
+        );
+      });
+
+      // Wait for all chunks to upload
+      const results = await Promise.allSettled(uploadPromises);
+
+      // Check results
+      const successful = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+
+      if (failed > 0) {
+        this.logger.error(
+          `Upload completed with errors: ${successful}/${totalChunks} successful, ${failed} failed`
+        );
+
+        await this.prisma.file.update({
+          where: { id: metadata.fileId },
+          data: { uploadStatus: 'partial' },
+        });
+      } else {
+        this.logger.log(`All ${totalChunks} chunks uploaded successfully for file ${metadata.fileId}`);
+
+        await this.prisma.file.update({
+          where: { id: metadata.fileId },
+          data: { uploadStatus: 'completed' },
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Background upload failed for file ${metadata.fileId}:`, error);
+
+      await this.prisma.file.update({
+        where: { id: metadata.fileId },
+        data: { uploadStatus: 'failed' },
+      });
+    }
+  }
+
+  /**
+   * Main upload function - returns immediately with uploading status
    */
   async uploadFile(
     file: Express.Multer.File,
@@ -296,14 +442,15 @@ export class UploadService implements OnModuleInit {
     enableCompression: boolean = true,
   ): Promise<{
     fileId: string;
-    arkivAddresses: string[];
+    status: string;
     totalSize: number;
     originalSize: number;
     compressed: boolean;
-    chunks: number;
+    totalChunks: number;
+    message: string;
   }> {
     this.logger.log(
-      `Uploading file: ${file.originalname}, size: ${file.size} bytes, type: ${file.mimetype}, compression: ${enableCompression}`,
+      `Starting upload: ${file.originalname}, size: ${file.size} bytes, compression: ${enableCompression}`
     );
 
     const originalSize = file.size;
@@ -313,15 +460,9 @@ export class UploadService implements OnModuleInit {
     // Determine file type category
     const isImage = file.mimetype.startsWith('image/');
     const isVideo = file.mimetype.startsWith('video/');
-    const isText = file.mimetype.startsWith('text/') ||
-      file.mimetype.includes('json') ||
-      file.mimetype.includes('xml') ||
-      file.mimetype.includes('yaml') ||
-      file.mimetype.includes('javascript') ||
-      file.mimetype.includes('typescript');
     const isPlainFile = !isImage && !isVideo;
 
-    // Compress based on file type (only if enabled and applicable)
+    // Compress based on file type
     if (enableCompression && (isImage || isVideo)) {
       if (isImage) {
         processedBuffer = await this.compressImage(file.buffer);
@@ -331,74 +472,100 @@ export class UploadService implements OnModuleInit {
         compressed = true;
       }
     } else if (isPlainFile) {
-      this.logger.log(`Uploading plain file (${file.mimetype}) without compression`);
-    } else {
-      this.logger.log('Compression disabled, uploading original file');
+      this.logger.log(`Plain file (${file.mimetype}), no compression`);
     }
 
     // Split into chunks
     const chunks = this.chunkBuffer(processedBuffer, this.CHUNK_SIZE);
     const totalChunks = chunks.length;
 
-    this.logger.log(
-      `File will be uploaded in ${totalChunks} chunk(s) of max ${this.CHUNK_SIZE} bytes`,
-    );
+    this.logger.log(`File split into ${totalChunks} chunk(s)`);
 
-    // Upload all chunks in parallel
-    this.logger.log(`Uploading ${totalChunks} chunks in parallel...`);
-    const arkivAddresses: string[] = [];
-    const chunkRecords = [];
-
-    const uploadPromises = chunks.map((chunk, i) =>
-      this.uploadToArkiv(chunk, {
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        size: chunk.length,
-        chunkIndex: i,
-        totalChunks,
-        userId,
-      }).then(result => ({ ...result, index: i }))
-    );
-
-    const results = await Promise.all(uploadPromises);
-
-    // Sort results by index to maintain order
-    results.sort((a, b) => a.index - b.index);
-
-    for (const { entityKey, txHash, index } of results) {
-      arkivAddresses.push(entityKey);
-      chunkRecords.push({
-        chunkIndex: index,
-        arkivAddress: entityKey,
-        size: chunks[index].length,
-        txHash,
-      });
-    }
-
-    this.logger.log(`All ${totalChunks} chunks uploaded successfully`);
-
-    // Create main file record
+    // Create file record immediately
     const savedFile = await this.prisma.file.create({
       data: {
         originalName: file.originalname,
         mimeType: file.mimetype,
         size: processedBuffer.length,
         encoding: file.encoding,
-        arkivAddress: arkivAddresses[0], // Main address (first chunk)
+        arkivAddress: 'pending', // Will be updated when first chunk completes
         userId,
+        uploadStatus: 'uploading',
         chunks: {
-          create: chunkRecords,
+          create: chunks.map((chunk, index) => ({
+            chunkIndex: index,
+            size: chunk.length,
+            uploadStatus: 'pending',
+            retryCount: 0,
+          })),
         },
       },
     });
 
+    // Start background upload (don't await)
+    this.uploadInBackground(chunks, {
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      userId,
+      fileId: savedFile.id,
+    }).catch(error => {
+      this.logger.error(`Background upload error for ${savedFile.id}:`, error);
+    });
+
+    // Return immediately
     return {
       fileId: savedFile.id,
-      arkivAddresses,
+      status: 'uploading',
       totalSize: processedBuffer.length,
       originalSize,
       compressed,
-      chunks: totalChunks,
+      totalChunks,
+      message: `Upload started in background. ${totalChunks} chunk(s) will be uploaded using ${this.walletClients.length} wallet(s).`,
+    };
+  }
+
+  /**
+   * Get upload status
+   */
+  async getUploadStatus(fileId: string, userId: string) {
+    const file = await this.prisma.file.findFirst({
+      where: {
+        id: fileId,
+        userId,
+      },
+      include: {
+        chunks: {
+          orderBy: {
+            chunkIndex: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!file) {
+      throw new Error('File not found');
+    }
+
+    const totalChunks = file.chunks.length;
+    const completedChunks = file.chunks.filter(c => c.uploadStatus === 'completed').length;
+    const failedChunks = file.chunks.filter(c => c.uploadStatus === 'failed').length;
+    const pendingChunks = file.chunks.filter(c => c.uploadStatus === 'pending' || c.uploadStatus === 'retrying').length;
+
+    return {
+      fileId: file.id,
+      fileName: file.originalName,
+      uploadStatus: file.uploadStatus,
+      totalChunks,
+      completedChunks,
+      failedChunks,
+      pendingChunks,
+      progress: totalChunks > 0 ? Math.round((completedChunks / totalChunks) * 100) : 0,
+      chunks: file.chunks.map(chunk => ({
+        index: chunk.chunkIndex,
+        status: chunk.uploadStatus,
+        retryCount: chunk.retryCount,
+        arkivAddress: chunk.arkivAddress !== 'pending' ? chunk.arkivAddress : null,
+      })),
     };
   }
 
@@ -639,6 +806,63 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
+   * Simple upload helper for video segments (synchronous, no background processing)
+   */
+  private async simpleUploadToArkiv(
+    buffer: Buffer,
+    metadata: {
+      fileName: string;
+      mimeType: string;
+      size: number;
+      chunkIndex?: number;
+      totalChunks?: number;
+      userId: string;
+    },
+  ): Promise<{ entityKey: string; txHash: string }> {
+    const wallet = this.getNextWallet();
+    const entityId = randomUUID();
+    const isChunk = metadata.chunkIndex !== undefined;
+
+    const result = await wallet.createEntity({
+      payload: jsonToPayload({
+        entity: {
+          entityType: isChunk ? 'file-chunk' : 'file',
+          entityId,
+          fileName: metadata.fileName,
+          mimeType: metadata.mimeType,
+          userId: metadata.userId,
+          size: metadata.size,
+          uploadedAt: Date.now(),
+          ...(isChunk && {
+            chunkIndex: metadata.chunkIndex,
+            totalChunks: metadata.totalChunks,
+          }),
+        },
+        data: buffer.toString('base64'),
+      }),
+      contentType: 'application/json',
+      attributes: [
+        { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
+        { key: 'fileName', value: metadata.fileName },
+        { key: 'mimeType', value: metadata.mimeType },
+        { key: 'userId', value: metadata.userId },
+        ...(isChunk
+          ? [
+            { key: 'chunkIndex', value: metadata.chunkIndex.toString() },
+            { key: 'totalChunks', value: metadata.totalChunks.toString() },
+          ]
+          : []),
+      ],
+      expiresIn: ExpirationTime.fromDays(30),
+    });
+
+    return {
+      entityKey: result.entityKey,
+      txHash: result.txHash,
+    };
+  }
+
+  /**
    * Upload video with DASH conversion
    */
   async uploadVideoWithDash(
@@ -692,7 +916,7 @@ export class UploadService implements OnModuleInit {
         const manifestChunkAddresses: string[] = [];
 
         for (let i = 0; i < manifestChunks.length; i++) {
-          const chunkUpload = await this.uploadToArkiv(manifestChunks[i], {
+          const chunkUpload = await this.simpleUploadToArkiv(manifestChunks[i], {
             fileName: `${file.originalname}.mpd_chunk${i}`,
             mimeType: 'application/dash+xml',
             size: manifestChunks[i].length,
@@ -707,7 +931,7 @@ export class UploadService implements OnModuleInit {
         this.logger.log(`Manifest uploaded in ${manifestChunks.length} chunks`);
       } else {
         // Manifest pequeño, subir directamente
-        const manifestUpload = await this.uploadToArkiv(manifestBuffer, {
+        const manifestUpload = await this.simpleUploadToArkiv(manifestBuffer, {
           fileName: `${file.originalname}.mpd`,
           mimeType: 'application/dash+xml',
           size: manifestBuffer.length,
@@ -736,7 +960,7 @@ export class UploadService implements OnModuleInit {
 
           // Subir todos los chunks del segmento en paralelo
           const chunkUploadPromises = chunks.map((chunk, i) =>
-            this.uploadToArkiv(chunk, {
+            this.simpleUploadToArkiv(chunk, {
               fileName: `${file.originalname}_${segment.resolution}_${segment.index}_chunk${i}`,
               mimeType: 'video/mp4',
               size: chunk.length,
@@ -763,7 +987,7 @@ export class UploadService implements OnModuleInit {
           };
         } else {
           // Segmento pequeño, subir directamente
-          const segmentUpload = await this.uploadToArkiv(segmentBuffer, {
+          const segmentUpload = await this.simpleUploadToArkiv(segmentBuffer, {
             fileName: `${file.originalname}_${segment.resolution}_${segment.index}`,
             mimeType: 'video/mp4',
             size: segment.size,
@@ -887,6 +1111,23 @@ export class UploadService implements OnModuleInit {
         arkivAddress: seg.arkivAddress,
         duration: seg.duration,
         size: seg.size,
+      })),
+    };
+  }
+
+  /**
+   * Get wallets statistics
+   */
+  getWalletsStats() {
+    return {
+      totalWallets: this.walletClients.length,
+      currentWalletIndex: this.currentWalletIndex,
+      nextWalletAddress: this.walletClients[this.currentWalletIndex]?.account?.address || 'N/A',
+      loadBalancing: 'round-robin',
+      wallets: this.walletClients.map((client, index) => ({
+        index: index + 1,
+        address: client.account.address,
+        isNext: index === this.currentWalletIndex,
       })),
     };
   }

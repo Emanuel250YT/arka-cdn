@@ -21,6 +21,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
+    "wallet:generate": "node scripts/generate-wallets.js",
+    "wallet:generate:5": "node scripts/generate-wallets.js 5",
+    "wallet:stats": "curl -s http://localhost:3000/api/upload/stats/wallet-pool | json_pp",
     "hardhat:compile": "hardhat compile",
     "hardhat:test": "hardhat test",
     "hardhat:deploy": "hardhat run scripts/deploy.ts"
