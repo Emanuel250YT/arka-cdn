@@ -35,7 +35,7 @@ import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UploadFileDto, UploadVideoDto } from './dto';
 
 @ApiTags('Upload')
-@ApiBearerAuth()
+@ApiBearerAuth('JWT-auth')
 @Controller('upload')
 @UseGuards(JwtAuthGuard)
 export class UploadController {
@@ -111,19 +111,43 @@ export class UploadController {
         data: {
           type: 'object',
           properties: {
-            fileId: { type: 'string', example: 'uuid' },
-            arkivAddresses: { type: 'array', items: { type: 'string' } },
+            fileId: { type: 'string', example: '550e8400-e29b-41d4-a716-446655440000' },
+            arkivAddresses: { type: 'array', items: { type: 'string' }, example: ['0xabc123...', '0xdef456...'] },
             totalSize: { type: 'number', example: 1024000 },
             originalSize: { type: 'number', example: 2048000 },
             compressed: { type: 'boolean', example: true },
             chunks: { type: 'number', example: 2 },
+            status: { type: 'string', example: 'completed' },
+            publicUrl: { type: 'string', example: 'http://localhost:3000/api/data/550e8400-e29b-41d4-a716-446655440000' },
           },
         },
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Validation or upload error' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation or upload error',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 400 },
+        message: { type: 'string', example: 'File too large' },
+        error: { type: 'string', example: 'Bad Request' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing token',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Unauthorized' },
+        error: { type: 'string', example: 'Unauthorized' },
+      },
+    },
+  })
   @UseInterceptors(FileInterceptor('file'))
   async uploadFileWithFormData(
     @UploadedFile(
@@ -335,19 +359,24 @@ export class UploadController {
           items: {
             type: 'object',
             properties: {
-              id: { type: 'string' },
-              originalName: { type: 'string' },
-              mimeType: { type: 'string' },
-              size: { type: 'number' },
-              isDashVideo: { type: 'boolean' },
-              createdAt: { type: 'string', format: 'date-time' },
+              id: { type: 'string', example: '550e8400-e29b-41d4-a716-446655440000' },
+              originalName: { type: 'string', example: 'image.jpg' },
+              mimeType: { type: 'string', example: 'image/jpeg' },
+              size: { type: 'number', example: 1024000 },
+              isDashVideo: { type: 'boolean', example: false },
+              createdAt: { type: 'string', format: 'date-time', example: '2024-01-01T00:00:00.000Z' },
+              expiresAt: { type: 'string', format: 'date-time', example: null, nullable: true },
+              publicUrl: { type: 'string', example: 'http://localhost:3000/api/data/550e8400-e29b-41d4-a716-446655440000' },
             },
           },
         },
       },
     },
   })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing token'
+  })
   async listFiles(@GetUser('id') userId: string) {
     try {
       const files = await this.uploadService.listUserFiles(userId);
@@ -841,15 +870,26 @@ export class DataController {
   @Header('Cache-Control', 'public, max-age=31536000, immutable')
   @ApiOperation({
     summary: 'Get file by UUID (Public)',
-    description: `Public endpoint to retrieve and download files by their UUID. 
-    The file is reassembled from its chunks stored on the Arkiv blockchain and returned directly as binary data with the appropriate content type.
+    description: `**⚠️ PUBLIC ENDPOINT - No authentication required**
     
-    This endpoint does not require authentication and can be used to share files publicly.
-    The file is returned directly, not as JSON, so it can be used in <img>, <video>, <audio> tags or downloaded directly.`,
+Retrieves and downloads files by their UUID. The file is reassembled from its chunks stored on the Arkiv blockchain and returned directly as binary data with the appropriate content type.
+
+**Use cases:**
+- Share files publicly via URL
+- Embed images in HTML: \`<img src="/api/data/{uuid}">\`
+- Embed videos: \`<video src="/api/data/{uuid}" controls></video>\`
+- Direct file downloads
+
+**Features:**
+- No authentication required
+- Returns file directly (not JSON)
+- Proper Content-Type headers
+- Immutable caching (1 year)
+- Support for all file types`,
   })
   @ApiParam({
     name: 'uuid',
-    description: 'File UUID',
+    description: 'File UUID obtained from upload response',
     type: 'string',
     example: '550e8400-e29b-41d4-a716-446655440000',
   })
@@ -864,9 +904,49 @@ export class DataController {
         },
       },
     },
+    headers: {
+      'Content-Type': {
+        description: 'MIME type of the file',
+        schema: { type: 'string', example: 'image/jpeg' },
+      },
+      'Content-Length': {
+        description: 'File size in bytes',
+        schema: { type: 'number', example: 1024000 },
+      },
+      'Content-Disposition': {
+        description: 'File name for download',
+        schema: { type: 'string', example: 'inline; filename="image.jpg"' },
+      },
+      'Cache-Control': {
+        description: 'Caching policy',
+        schema: { type: 'string', example: 'public, max-age=31536000, immutable' },
+      },
+    },
   })
-  @ApiResponse({ status: 404, description: 'File not found' })
-  @ApiResponse({ status: 500, description: 'Failed to retrieve file' })
+  @ApiResponse({
+    status: 404,
+    description: 'File not found or UUID is invalid',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 404 },
+        message: { type: 'string', example: 'File not found' },
+        error: { type: 'string', example: 'Not Found' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Failed to retrieve file from Arkiv Network',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 500 },
+        message: { type: 'string', example: 'Failed to retrieve file' },
+        error: { type: 'string', example: 'Internal Server Error' },
+      },
+    },
+  })
   async getFileByUuid(
     @Param('uuid') uuid: string,
     @Res() res: Response,

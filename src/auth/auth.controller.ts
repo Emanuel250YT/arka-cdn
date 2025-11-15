@@ -26,14 +26,34 @@ export class AuthController {
   constructor(private authService: AuthService) { }
 
   @Post('register')
-  @ApiOperation({ summary: 'Register a new user' })
+  @ApiOperation({
+    summary: 'Register a new user',
+    description: 'Creates a new user account with email and password'
+  })
   @ApiResponse({
     status: 201,
     description: 'User registered successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', example: '550e8400-e29b-41d4-a716-446655440000' },
+        email: { type: 'string', example: 'user@example.com' },
+        name: { type: 'string', example: 'John Doe' },
+        createdAt: { type: 'string', example: '2024-01-01T00:00:00.000Z' },
+      },
+    },
   })
   @ApiResponse({
     status: 409,
     description: 'Email already registered',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 409 },
+        message: { type: 'string', example: 'Email already registered' },
+        error: { type: 'string', example: 'Conflict' },
+      },
+    },
   })
   async register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
@@ -44,15 +64,38 @@ export class AuthController {
   @ApiOperation({
     summary: 'Login with email and password',
     description:
-      'Authenticates a user with email and password, returns JWT tokens.',
+      'Authenticates a user with email and password, or wallet address. Returns JWT access and refresh tokens.',
   })
   @ApiResponse({
     status: 200,
     description: 'Login successful',
+    schema: {
+      type: 'object',
+      properties: {
+        accessToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+        refreshToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+        user: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: '550e8400-e29b-41d4-a716-446655440000' },
+            email: { type: 'string', example: 'user@example.com' },
+            name: { type: 'string', example: 'John Doe' },
+          },
+        },
+      },
+    },
   })
   @ApiResponse({
     status: 401,
     description: 'Invalid credentials',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Invalid credentials' },
+        error: { type: 'string', example: 'Unauthorized' },
+      },
+    },
   })
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
@@ -60,7 +103,10 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiOperation({
+    summary: 'Refresh access token using refresh token',
+    description: 'Generates a new access token using a valid refresh token'
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -68,17 +114,34 @@ export class AuthController {
         refreshToken: {
           type: 'string',
           example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+          description: 'Valid refresh token obtained from login',
         },
       },
+      required: ['refreshToken'],
     },
   })
   @ApiResponse({
     status: 200,
     description: 'Access token refreshed',
+    schema: {
+      type: 'object',
+      properties: {
+        accessToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+        refreshToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+      },
+    },
   })
   @ApiResponse({
     status: 401,
     description: 'Invalid or expired refresh token',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Invalid or expired refresh token' },
+        error: { type: 'string', example: 'Unauthorized' },
+      },
+    },
   })
   async refresh(@Body('refreshToken') refreshToken: string) {
     return this.authService.refreshAccessToken(refreshToken);
@@ -86,12 +149,25 @@ export class AuthController {
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('JWT-auth')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Logout (revoke token)' })
+  @ApiOperation({
+    summary: 'Logout (revoke token)',
+    description: 'Closes the current session and revokes the access token'
+  })
   @ApiResponse({
     status: 200,
     description: 'Session closed successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', example: 'Session closed successfully' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing token',
   })
   async logout(@Headers('authorization') authorization: string) {
     const token = authorization?.replace('Bearer ', '');
@@ -101,11 +177,28 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get authenticated user information' })
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary: 'Get authenticated user information',
+    description: 'Returns the profile information of the currently authenticated user'
+  })
   @ApiResponse({
     status: 200,
     description: 'User information',
+    schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', example: '550e8400-e29b-41d4-a716-446655440000' },
+        email: { type: 'string', example: 'user@example.com' },
+        name: { type: 'string', example: 'John Doe' },
+        createdAt: { type: 'string', example: '2024-01-01T00:00:00.000Z' },
+        updatedAt: { type: 'string', example: '2024-01-01T00:00:00.000Z' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing token',
   })
   async getProfile(@GetUser() user: any) {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars

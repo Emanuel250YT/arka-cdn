@@ -33,15 +33,41 @@ async function bootstrap() {
   const config = new DocumentBuilder()
     .setTitle('Arka CDN - Arkiv Network Storage API')
     .setDescription(
-      'API REST para almacenamiento descentralizado de archivos y streaming de video con DASH. Integrado con Arkiv Network y Prisma.',
+      `API REST para almacenamiento descentralizado de archivos y streaming de video. 
+      
+**Características principales:**
+- Almacenamiento descentralizado en Arkiv Network
+- Compresión automática de imágenes y videos
+- Subida de archivos plain text y JSON
+- Sistema de chunks para archivos grandes
+- TTL (Time To Live) para archivos temporales
+- URLs públicas para compartir archivos
+
+**Base URL:** \`/api\`
+
+**Autenticación:** Bearer Token (JWT)`,
     )
     .setVersion('1.0')
+    .setContact(
+      'Support',
+      'https://github.com/Emanuel250YT/arka-cdn',
+      'support@example.com',
+    )
     .addTag('health', 'Health check endpoints')
     .addTag('auth', 'Autenticación y gestión de usuarios')
-    .addTag('users', 'Gestión de usuarios')
-    .addTag('Upload', 'Subida de archivos y conversión de video a streaming DASH')
-    .addTag('blockchain', 'Interacción con smart contracts')
-    .addBearerAuth()
+    .addTag('Upload', 'Subida y gestión de archivos (requiere autenticación)')
+    .addTag('Data', 'Acceso público a archivos (no requiere autenticación)')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'JWT',
+        description: 'Enter JWT token',
+        in: 'header',
+      },
+      'JWT-auth',
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
