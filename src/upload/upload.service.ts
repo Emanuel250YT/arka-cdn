@@ -489,49 +489,81 @@ export class UploadService implements OnModuleInit {
     const maxChecks = 720; // Max 1 hour (720 * 5s)
     let checks = 0;
 
+    this.logger.log(`[Monitor] Starting upload monitoring for file ${fileId} (${totalChunks} chunks)`);
+
     while (checks < maxChecks) {
       await this.sleep(checkInterval);
       checks++;
 
-      const chunks = await this.prisma.fileChunk.findMany({
-        where: { fileId },
-      });
+      try {
+        const chunks = await this.prisma.fileChunk.findMany({
+          where: { fileId },
+        });
 
-      const completed = chunks.filter((c) => c.uploadStatus === 'completed').length;
-      const failed = chunks.filter((c) => c.uploadStatus === 'failed').length;
-      const pending = chunks.filter((c) =>
-        c.uploadStatus === 'pending' || c.uploadStatus === 'retrying'
-      ).length;
+        const completed = chunks.filter((c) => c.uploadStatus === 'completed').length;
+        const failed = chunks.filter((c) => c.uploadStatus === 'failed').length;
+        const pending = chunks.filter((c) =>
+          c.uploadStatus === 'pending' || c.uploadStatus === 'retrying'
+        ).length;
 
-      this.logger.debug(
-        `[Monitor] File ${fileId}: ${completed}/${totalChunks} completed, ${failed} failed, ${pending} pending`
-      );
+        this.logger.debug(
+          `[Monitor] File ${fileId}: ${completed}/${totalChunks} completed, ${failed} failed, ${pending} pending`
+        );
 
-      // All chunks processed
-      if (pending === 0) {
-        if (failed > 0) {
-          await this.prisma.file.update({
-            where: { id: fileId },
-            data: { uploadStatus: 'partial' },
-          });
-          this.logger.warn(`File ${fileId} upload completed with ${failed} failed chunk(s)`);
-        } else {
-          await this.prisma.file.update({
-            where: { id: fileId },
-            data: { uploadStatus: 'completed' },
-          });
-          this.logger.log(`File ${fileId} upload completed successfully`);
+        // All chunks processed (either completed or failed)
+        if (pending === 0 && (completed + failed) === totalChunks) {
+          if (failed > 0 && completed === 0) {
+            // All chunks failed
+            await this.prisma.file.update({
+              where: { id: fileId },
+              data: {
+                uploadStatus: 'failed',
+                updatedAt: new Date(),
+              },
+            });
+            this.logger.error(`❌ File ${fileId} upload FAILED - all ${failed} chunk(s) failed`);
+          } else if (failed > 0) {
+            // Some chunks failed
+            await this.prisma.file.update({
+              where: { id: fileId },
+              data: {
+                uploadStatus: 'partial',
+                updatedAt: new Date(),
+              },
+            });
+            this.logger.warn(`⚠️ File ${fileId} upload completed PARTIALLY - ${completed}/${totalChunks} successful, ${failed} failed`);
+          } else {
+            // All chunks completed successfully
+            await this.prisma.file.update({
+              where: { id: fileId },
+              data: {
+                uploadStatus: 'completed',
+                updatedAt: new Date(),
+              },
+            });
+            this.logger.log(`✅ File ${fileId} upload COMPLETED successfully - ${completed}/${totalChunks} chunks`);
+          }
+          return;
         }
-        return;
+      } catch (error) {
+        this.logger.error(`[Monitor] Error checking status for file ${fileId}:`, error);
+        // Continue monitoring even if there's an error
       }
     }
 
-    // Timeout
-    this.logger.error(`Upload monitoring timed out for file ${fileId}`);
-    await this.prisma.file.update({
-      where: { id: fileId },
-      data: { uploadStatus: 'failed' },
-    });
+    // Timeout - mark as failed
+    this.logger.error(`⏱️ Upload monitoring TIMED OUT for file ${fileId} after ${maxChecks * checkInterval / 1000} seconds`);
+    try {
+      await this.prisma.file.update({
+        where: { id: fileId },
+        data: {
+          uploadStatus: 'failed',
+          updatedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Failed to update file status after timeout:`, error);
+    }
   }
 
   /**

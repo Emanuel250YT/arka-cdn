@@ -199,21 +199,35 @@ export class UploadPoolService implements OnModuleInit {
           `[Queue ${queueIndex + 1}] Processing chunk ${task.metadata.chunkIndex + 1}/${task.metadata.totalChunks} for file ${task.metadata.fileId}`,
         );
 
-        await this.uploadChunk(task, wq.walletClient, queueIndex);
+        // Upload chunk to Arkiv Network
+        const uploadResult = await this.uploadChunk(task, wq.walletClient, queueIndex);
         wq.successCount++;
 
-        // Update chunk status
-        await this.prisma.fileChunk.update({
-          where: {
-            fileId_chunkIndex: {
-              fileId: task.metadata.fileId,
-              chunkIndex: task.metadata.chunkIndex,
+        // Update chunk status in database - CRITICAL: ensure status is updated
+        try {
+          await this.prisma.fileChunk.update({
+            where: {
+              fileId_chunkIndex: {
+                fileId: task.metadata.fileId,
+                chunkIndex: task.metadata.chunkIndex,
+              },
             },
-          },
-          data: {
-            uploadStatus: 'completed',
-          },
-        }).catch(() => { });
+            data: {
+              uploadStatus: 'completed',
+              arkivAddress: uploadResult.arkivAddress,
+              txHash: uploadResult.txHash,
+            },
+          });
+          this.logger.debug(
+            `[Queue ${queueIndex + 1}] ✅ Chunk ${task.metadata.chunkIndex + 1}/${task.metadata.totalChunks} status updated to COMPLETED`
+          );
+        } catch (dbError) {
+          this.logger.error(
+            `[Queue ${queueIndex + 1}] ❌ Failed to update chunk status in database:`,
+            dbError
+          );
+          // Even if DB update fails, the chunk was uploaded successfully
+        }
 
       } catch (error) {
         wq.failureCount++;
@@ -226,43 +240,60 @@ export class UploadPoolService implements OnModuleInit {
         if (task.retryCount < this.maxRetries) {
           task.retryCount++;
           this.logger.warn(
-            `[Queue ${queueIndex + 1}] Retry ${task.retryCount}/${this.maxRetries} for chunk ${task.metadata.chunkIndex + 1}`,
+            `[Queue ${queueIndex + 1}] 🔄 Retry ${task.retryCount}/${this.maxRetries} for chunk ${task.metadata.chunkIndex + 1}`,
           );
 
           // Update retry count in database
-          await this.prisma.fileChunk.update({
-            where: {
-              fileId_chunkIndex: {
-                fileId: task.metadata.fileId,
-                chunkIndex: task.metadata.chunkIndex,
+          try {
+            await this.prisma.fileChunk.update({
+              where: {
+                fileId_chunkIndex: {
+                  fileId: task.metadata.fileId,
+                  chunkIndex: task.metadata.chunkIndex,
+                },
               },
-            },
-            data: {
-              uploadStatus: 'retrying',
-              retryCount: task.retryCount,
-            },
-          }).catch(() => { });
+              data: {
+                uploadStatus: 'retrying',
+                retryCount: task.retryCount,
+              },
+            });
+          } catch (dbError) {
+            this.logger.error(
+              `[Queue ${queueIndex + 1}] Failed to update retry status in database:`,
+              dbError
+            );
+          }
 
           // Re-add to queue for retry
           wq.queue.push(task);
         } else {
           this.logger.error(
-            `[Queue ${queueIndex + 1}] Max retries reached for chunk ${task.metadata.chunkIndex + 1}. Marking as failed.`,
+            `[Queue ${queueIndex + 1}] ❌ Max retries reached for chunk ${task.metadata.chunkIndex + 1}. Marking as FAILED.`,
           );
 
-          // Mark as failed in database
-          await this.prisma.fileChunk.update({
-            where: {
-              fileId_chunkIndex: {
-                fileId: task.metadata.fileId,
-                chunkIndex: task.metadata.chunkIndex,
+          // Mark as failed in database - CRITICAL: ensure this is updated
+          try {
+            await this.prisma.fileChunk.update({
+              where: {
+                fileId_chunkIndex: {
+                  fileId: task.metadata.fileId,
+                  chunkIndex: task.metadata.chunkIndex,
+                },
               },
-            },
-            data: {
-              uploadStatus: 'failed',
-              retryCount: this.maxRetries,
-            },
-          }).catch(() => { });
+              data: {
+                uploadStatus: 'failed',
+                retryCount: this.maxRetries,
+              },
+            });
+            this.logger.debug(
+              `[Queue ${queueIndex + 1}] Chunk ${task.metadata.chunkIndex + 1} status updated to FAILED in database`
+            );
+          } catch (dbError) {
+            this.logger.error(
+              `[Queue ${queueIndex + 1}] CRITICAL: Failed to update failed chunk status in database:`,
+              dbError
+            );
+          }
         }
       }
 
@@ -285,7 +316,7 @@ export class UploadPoolService implements OnModuleInit {
     task: ChunkTask,
     walletClient: any,
     queueIndex: number,
-  ): Promise<void> {
+  ): Promise<{ arkivAddress: string; txHash: string }> {
     const entityId = randomUUID();
     const { buffer, metadata } = task;
 
@@ -317,22 +348,13 @@ export class UploadPoolService implements OnModuleInit {
     });
 
     this.logger.log(
-      `[Queue ${queueIndex + 1}] Chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks} uploaded - Key: ${result.entityKey}`,
+      `[Queue ${queueIndex + 1}] Chunk ${metadata.chunkIndex + 1}/${metadata.totalChunks} uploaded - Key: ${result.entityKey}, TxHash: ${result.txHash}`,
     );
 
-    // Update chunk in database with entity key
-    await this.prisma.fileChunk.update({
-      where: {
-        fileId_chunkIndex: {
-          fileId: metadata.fileId,
-          chunkIndex: metadata.chunkIndex,
-        },
-      },
-      data: {
-        arkivAddress: result.entityKey,
-        txHash: result.txHash,
-      },
-    }).catch(() => { });
+    return {
+      arkivAddress: result.entityKey,
+      txHash: result.txHash,
+    };
   }
 
   /**
