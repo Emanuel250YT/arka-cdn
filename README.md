@@ -559,6 +559,49 @@ npm run test:watch         # Tests in watch mode
 npm run test:cov           # Test coverage
 ```
 
+## ?? Paseo TestNet Integration (Polkadot Hub)
+
+This repository now bundles the full flow described in the [Polkadot ""Create a Smart Contract"" tutorial](https://docs.polkadot.com/tutorials/smart-contracts/launch-your-first-project/create-contracts/) so you can deploy and interact with the Storage.sol contract directly on **Paseo TestNet (Polkadot Hub)**.
+
+### 1. Configure environment variables
+
+`env
+PASEO_RPC_URL=https://testnet-passet-hub-eth-rpc.polkadot.io
+PASEO_BLOCK_EXPLORER=https://blockscout-passet-hub.parity-testnet.parity.io
+PASEO_PRIVATE_KEY=your_wallet_private_key_without_0x
+PASEO_STORAGE_CONTRACT=0xyourDeployedStorageAddress
+`
+
+All values have safe defaults except the private key and the deployed contract address. The private key can fund gas by requesting PAS tokens from the official Paseo faucet listed in the Polkadot docs.
+
+### 2. Deploy the Storage contract on Paseo
+
+`ash
+npm run hardhat:compile
+npx hardhat run scripts/deploy.ts --network paseo
+`
+
+Copy the address printed by the deploy script to PASEO_STORAGE_CONTRACT.
+
+### 3. Interact with Paseo from the API
+
+The PaseoModule uses Viem to expose authenticated endpoints (all under /api/paseo):
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| GET  | /paseo/network | Returns RPC, explorer URL, chainId, gas price and latest block from Paseo. |
+| GET  | /paseo/storage | Calls etrieve() on Storage.sol and returns the stored value. |
+| POST | /paseo/storage | Executes store(uint256) using the configured private key. Body: { "value": 123 }. |
+
+Each write response also links the Blockscout explorer so you can trace the transaction on Paseo TestNet.
+
+### 🔐 SubWallet-only connection policy
+
+- Install the [SubWallet browser extension](https://www.subwallet.app/download.html), switch to **Paseo TestNet (Polkadot Hub)**, and export the account you will dedicate to Arka CDN.
+- From SubWallet, copy the private key **in hex without the `0x` prefix** and paste it into `.env` as `PASEO_PRIVATE_KEY`; the backend trims the prefix automatically.
+- Use this same SubWallet account whenever you connect the dapp UI or sign API requests—other wallets are intentionally unsupported to keep the signing context consistent.
+- Hardhat deployments (`npx hardhat run scripts/deploy.ts --network paseo`) will pick up that key, so contract deploys and on-chain writes always come from the SubWallet-managed identity.
+- If you rotate the SubWallet account, update both the extension and `.env` simultaneously; the backend refuses write calls when the key is missing.
 ## 🌐 Technologies Used
 
 | Category       | Technologies                       |
@@ -627,3 +670,4 @@ This project is under the MIT License - see the [LICENSE](LICENSE) file for deta
 **⭐ If this project was useful to you, consider giving it a star on GitHub!**
 
 **Developed with ❤️ by Emanuel250YT**
+
