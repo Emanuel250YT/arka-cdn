@@ -227,7 +227,7 @@ export class UploadService implements OnModuleInit {
   /**
    * Get optimized encoder configurations based on video format and hardware detection
    */
-  private async getOptimizedEncoderConfigs(originalFormat: string): Promise<Array<{name: string, options: string[], outputExt: string}>> {
+  private async getOptimizedEncoderConfigs(originalFormat: string, fileSize: number): Promise<Array<{name: string, options: string[], outputExt: string}>> {
     const isWebm = originalFormat.includes('webm');
     const isAvi = originalFormat.includes('avi');
     const isMov = originalFormat.includes('mov') || originalFormat.includes('quicktime');
@@ -239,99 +239,101 @@ export class UploadService implements OnModuleInit {
     else if (isMov) outputExt = 'mov';
     else if (isMkv) outputExt = 'mkv';
     
+    const fileSizeMB = fileSize / (1024 * 1024);
+    this.logger.log(`Video size: ${fileSizeMB.toFixed(2)}MB - Applying 50% scale + aggressive compression`);
+    
     return [
-      // WebM with VP9 - Best compression (try first for all formats except specific ones)
+      // WebM with VP9 - Best compression
       {
         name: 'VP9 WebM (best compression)',
         outputExt: 'webm',
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'libvpx-vp9',
-          '-crf', '35',
+          '-crf', '32',
           '-b:v', '0',
           '-row-mt', '1',
-          '-cpu-used', '4',
+          '-threads', '4',
+          '-speed', '4',
+          '-tile-columns', '2',
+          '-frame-parallel', '1',
           '-c:a', 'libopus',
-          '-b:a', '32k',
-          '-ac', '1',
+          '-b:a', '48k',
+          '-ar', '48000',
         ]
       },
       {
-        name: 'Hardware H.264 NVIDIA (ultra compression)',
+        name: 'Hardware H.264 NVIDIA',
         outputExt,
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'h264_nvenc',
-          '-preset', 'slow',
-          '-cq', '32',
-          '-b:v', '300k',
-          '-maxrate', '400k',
-          '-bufsize', '600k',
+          '-preset', 'p7',
+          '-cq', '28',
+          '-b:v', '500k',
+          '-maxrate', '700k',
+          '-bufsize', '1M',
           '-c:a', 'aac',
-          '-b:a', '48k',
-          '-ar', '22050',
-          '-ac', '1',
+          '-b:a', '64k',
+          '-ar', '44100',
           ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
         ]
       },
       {
-        name: 'Hardware H.264 AMD (ultra compression)',
+        name: 'Hardware H.264 AMD',
         outputExt,
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'h264_amf',
           '-quality', 'speed',
           '-rc', 'vbr_latency',
-          '-b:v', '300k',
-          '-maxrate', '400k',
-          '-qp_i', '35',
-          '-qp_p', '35',
+          '-b:v', '500k',
+          '-maxrate', '700k',
+          '-qp_i', '28',
+          '-qp_p', '28',
           '-c:a', 'aac',
-          '-b:a', '48k',
-          '-ar', '22050',
-          '-ac', '1',
+          '-b:a', '64k',
+          '-ar', '44100',
           ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
         ]
       },
       {
-        name: 'Hardware H.264 Intel QSV (ultra compression)',
+        name: 'Hardware H.264 Intel QSV',
         outputExt,
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'h264_qsv',
           '-preset', 'veryfast',
-          '-global_quality', '32',
-          '-b:v', '300k',
-          '-maxrate', '400k',
+          '-global_quality', '28',
+          '-b:v', '500k',
+          '-maxrate', '700k',
           '-c:a', 'aac',
-          '-b:a', '48k',
-          '-ar', '22050',
-          '-ac', '1',
+          '-b:a', '64k',
+          '-ar', '44100',
           ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
         ]
       },
       {
-        name: 'libopenh264 (aggressive compression)',
+        name: 'libopenh264 (aggressive)',
         outputExt,
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'libopenh264',
-          '-b:v', '250k',
-          '-maxrate', '350k',
+          '-b:v', '400k',
+          '-maxrate', '600k',
           '-c:a', 'libmp3lame',
-          '-b:a', '48k',
-          '-ar', '22050',
-          '-ac', '1',
+          '-b:a', '64k',
+          '-ar', '44100',
         ]
       },
       {
-        name: 'libopenh264 minimal (last resort)',
+        name: 'libopenh264 fallback',
         outputExt,
         options: [
           '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'libopenh264',
-          '-b:v', '200k',
-          '-c:a', 'copy',
+          '-b:v', '500k',
+          '-an',
         ]
       }
     ];
@@ -363,7 +365,7 @@ export class UploadService implements OnModuleInit {
       this.logger.log(`Output directory exists: ${existsSync(tempDir)}`);
 
       // Get optimized encoder configs based on available hardware and video format
-      const encoderConfigs = await this.getOptimizedEncoderConfigs(originalName);
+      const encoderConfigs = await this.getOptimizedEncoderConfigs(originalName, buffer.length);
 
       // Try each encoder configuration
       for (let i = 0; i < encoderConfigs.length; i++) {
