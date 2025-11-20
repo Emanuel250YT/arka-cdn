@@ -108,5 +108,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "jose": "^4.15.9"
   }
 }
