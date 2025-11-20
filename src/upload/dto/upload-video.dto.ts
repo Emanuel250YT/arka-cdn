@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { IsOptional, IsBoolean, IsArray, IsString } from 'class-validator';
+import { IsOptional, IsBoolean, IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -11,32 +11,6 @@ export class UploadVideoDto {
   @IsOptional()
   @IsString()
   description?: string;
-
-  @ApiPropertyOptional({
-    description: 'Habilitar conversión a formato DASH para streaming adaptativo',
-    default: true,
-    example: true,
-  })
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    return value;
-  })
-  @IsBoolean()
-  enableDash?: boolean = true;
-
-  @ApiPropertyOptional({
-    description: 'Resoluciones a generar para DASH streaming',
-    default: ['1080p', '720p', '480p', '360p'],
-    example: ['1080p', '720p', '480p'],
-    isArray: true,
-    type: String,
-  })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  resolutions?: string[] = ['1080p', '720p', '480p', '360p'];
 
   @ApiPropertyOptional({
     description: 'Comprimir el video antes de procesar',

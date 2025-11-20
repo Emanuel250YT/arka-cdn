@@ -46,11 +46,11 @@ export class UploadController {
   @Post('file')
   @ApiOperation({
     summary: 'Upload file (images, videos, documents)',
-    description: `Upload a file to Arkiv Network with compression and streaming conversion options.
+    description: `Upload a file to Arkiv Network with compression options.
     
     **Supported file types:**
     - **Images**: jpeg, jpg, png, gif (optional compression to 1080p)
-    - **Videos**: mp4, avi, mov, wmv, webm, mkv (optional compression and DASH streaming)
+    - **Videos**: mp4, avi, mov, wmv, webm, mkv (optional compression)
     - **Text files**: txt, md, csv, log, xml, html, css, js, ts, jsx, tsx
     - **Data files**: json, yaml, yml, toml, ini, conf, config
     - **Documents**: pdf
@@ -58,10 +58,9 @@ export class UploadController {
     
     **Options:**
     - compress: Reduce file size (images and videos only)
-    - enableDashStreaming: Convert videos to adaptive streaming format with multiple resolutions
     
     **Limits:**
-    - Max size: 100MB (without streaming) / 500MB (with streaming)`,
+    - Max size: 100MB`,
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -84,12 +83,7 @@ export class UploadController {
           default: true,
           example: true,
         },
-        enableDashStreaming: {
-          type: 'boolean',
-          description: 'Convert video to DASH streaming format (videos only)',
-          default: false,
-          example: false,
-        },
+
         ttl: {
           type: 'number',
           description: 'Time to live in milliseconds (TTL). File will expire after this time.',
@@ -168,36 +162,18 @@ export class UploadController {
     try {
       this.logger.log(`User ${userId} uploading file: ${file.originalname}`);
 
-      // DASH streaming temporalmente deshabilitado
-      const isVideo = file.mimetype.startsWith('video/');
-      const useDashStreaming = false; // Deshabilitado temporalmente
-      // const useDashStreaming = isVideo && uploadFileDto.enableDashStreaming;
-
-      let result;
-
-      if (useDashStreaming) {
-        // Usar endpoint de DASH streaming
-        result = await this.uploadService.uploadVideoWithDash(
-          file,
-          userId,
-          ['1080p', '720p', '480p', '360p'],
-        );
-      } else {
-        // Upload normal con o sin compresión
-        const shouldCompress = uploadFileDto.compress === true || uploadFileDto.compress === undefined;
-        result = await this.uploadService.uploadFile(
-          file,
-          userId,
-          shouldCompress,
-          uploadFileDto.ttl,
-        );
-      }
+      // Upload normal con o sin compresión
+      const shouldCompress = uploadFileDto.compress === true || uploadFileDto.compress === undefined;
+      const result = await this.uploadService.uploadFile(
+        file,
+        userId,
+        shouldCompress,
+        uploadFileDto.ttl,
+      );
 
       return {
         success: true,
-        message: useDashStreaming
-          ? 'Video converted to DASH streaming successfully'
-          : 'File uploaded successfully',
+        message: 'File uploaded successfully',
         data: result,
       };
     } catch (error) {
@@ -363,7 +339,7 @@ export class UploadController {
               originalName: { type: 'string', example: 'image.jpg' },
               mimeType: { type: 'string', example: 'image/jpeg' },
               size: { type: 'number', example: 1024000 },
-              isDashVideo: { type: 'boolean', example: false },
+
               createdAt: { type: 'string', format: 'date-time', example: '2024-01-01T00:00:00.000Z' },
               expiresAt: { type: 'string', format: 'date-time', example: null, nullable: true },
               publicUrl: { type: 'string', example: 'http://localhost:3000/api/data/550e8400-e29b-41d4-a716-446655440000' },
@@ -563,221 +539,6 @@ export class UploadController {
       this.logger.error('Get JSON file error:', error);
       throw new BadRequestException(
         error.message || 'Failed to get JSON file',
-      );
-    }
-  }
-
-  // ===== DASH VIDEO STREAMING ENDPOINTS =====
-  // TEMPORALMENTE DESHABILITADOS
-
-
-  @Post('video/dash')
-  @ApiOperation({
-    summary: 'Upload video with DASH conversion',
-    description: `Upload a video and automatically convert it to DASH format with multiple resolutions for adaptive streaming.
-    
-    **Features:**
-    - Automatic conversion to multiple resolutions (1080p, 720p, 480p, 360p)
-    - Segmentation into 4-second chunks
-    - MPD manifest generation
-    - Decentralized storage on Arkiv Network
-    
-    **Note:** This process may take several minutes depending on video size.`,
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'Video file',
-        },
-        description: {
-          type: 'string',
-          description: 'Video description',
-        },
-        enableDash: {
-          type: 'boolean',
-          description: 'Enable DASH conversion',
-          default: true,
-        },
-        resolutions: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Resolutions to generate',
-          example: ['1080p', '720p', '480p'],
-        },
-        compress: {
-          type: 'boolean',
-          description: 'Compress video before processing',
-          default: true,
-        },
-      },
-      required: ['file'],
-    },
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Video converted to DASH successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean', example: true },
-        message: { type: 'string' },
-        data: {
-          type: 'object',
-          properties: {
-            fileId: { type: 'string' },
-            manifestUrl: { type: 'string' },
-            duration: { type: 'number' },
-            resolutions: { type: 'array', items: { type: 'string' } },
-            totalSegments: { type: 'number' },
-          },
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 400, description: 'Conversion error' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadVideoWithDash(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 500 * 1024 * 1024 }), // 500MB max para videos
-          new FileTypeValidator({
-            fileType: /video\/(mp4|avi|mov|wmv|webm|mkv)/,
-          }),
-        ],
-        fileIsRequired: true,
-      }),
-    )
-    file: Express.Multer.File,
-    @GetUser('id') userId: string,
-    @Body() uploadVideoDto: UploadVideoDto,
-  ) {
-    try {
-      this.logger.log(`User ${userId} uploading video for DASH: ${file.originalname}`);
-
-      const result = await this.uploadService.uploadVideoWithDash(
-        file,
-        userId,
-        uploadVideoDto.resolutions || ['1080p', '720p', '480p', '360p'],
-      );
-
-      return {
-        success: true,
-        message: 'Video uploaded and converted to DASH successfully',
-        data: result,
-      };
-    } catch (error) {
-      this.logger.error('DASH upload error:', error);
-      throw new BadRequestException(
-        error.message || 'Failed to upload and convert video to DASH',
-      );
-    }
-  }
-
-  @Get('video/:id/manifest')
-  @ApiOperation({
-    summary: 'Get video MPD manifest',
-    description: 'Get the MPD manifest file needed to play the video in DASH format',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Video ID',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'MPD manifest',
-    content: {
-      'application/dash+xml': {
-        schema: { type: 'string' },
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: 'Video no encontrado' })
-  @ApiResponse({ status: 401, description: 'No autorizado' })
-  @Header('Content-Type', 'application/dash+xml')
-  async getVideoManifest(
-    @Param('id') fileId: string,
-    @GetUser('id') userId: string,
-  ) {
-    try {
-      const manifest = await this.uploadService.getVideoManifest(fileId, userId);
-      return manifest;
-    } catch (error) {
-      this.logger.error('Get manifest error:', error);
-      throw new BadRequestException(
-        error.message || 'Failed to get video manifest',
-      );
-    }
-  }
-
-  @Get('video/:id/info')
-  @ApiOperation({
-    summary: 'Get video streaming information',
-    description: 'Get detailed information about the video in DASH format, including segments and available resolutions',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Video ID',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Video streaming information',
-    schema: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        data: {
-          type: 'object',
-          properties: {
-            fileId: { type: 'string' },
-            originalName: { type: 'string' },
-            duration: { type: 'number' },
-            resolutions: { type: 'array', items: { type: 'string' } },
-            manifestUrl: { type: 'string' },
-            processingStatus: { type: 'string' },
-            segments: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  index: { type: 'number' },
-                  resolution: { type: 'string' },
-                  arkivAddress: { type: 'string' },
-                  duration: { type: 'number' },
-                  size: { type: 'number' },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: 'Video no encontrado' })
-  @ApiResponse({ status: 401, description: 'No autorizado' })
-  async getVideoStreamingInfo(
-    @Param('id') fileId: string,
-    @GetUser('id') userId: string,
-  ) {
-    try {
-      const info = await this.uploadService.getVideoStreamingInfo(fileId, userId);
-
-      return {
-        success: true,
-        data: info,
-      };
-    } catch (error) {
-      this.logger.error('Get video info error:', error);
-      throw new BadRequestException(
-        error.message || 'Failed to get video streaming info',
       );
     }
   }

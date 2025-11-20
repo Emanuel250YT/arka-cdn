@@ -26,20 +26,6 @@ export class UploadFileDto {
   compress?: boolean = true;
 
   @ApiPropertyOptional({
-    description: 'Convertir video a formato streaming DASH (solo para videos)',
-    default: false,
-    example: false,
-  })
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    return value;
-  })
-  @IsBoolean()
-  enableDashStreaming?: boolean = false;
-
-  @ApiPropertyOptional({
     description: 'Tiempo de vida del archivo en milisegundos (TTL). Después de este tiempo el archivo expirará.',
     example: 86400000,
     minimum: 60000,
