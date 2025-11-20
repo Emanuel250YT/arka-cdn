@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { DashConverterService } from './dash-converter.service';
 import { UploadPoolService } from './upload-pool.service';
 import { createWalletClient, createPublicClient } from '@arkiv-network/sdk';
 import { http } from '@arkiv-network/sdk';
@@ -33,7 +32,6 @@ export class UploadService implements OnModuleInit {
 
   constructor(
     private prisma: PrismaService,
-    private dashConverter: DashConverterService,
     private uploadPool: UploadPoolService,
   ) { }
 
@@ -198,7 +196,112 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Compress and resize video to max 1080p
+   * Get optimized encoder configurations based on speed priority and hardware detection
+   */
+  private async getOptimizedEncoderConfigs(): Promise<Array<{name: string, options: string[]}>> {
+    return [
+      {
+        name: 'Hardware H.264 NVIDIA (h264_nvenc)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'h264_nvenc',
+          '-preset', 'fast',
+          '-cq', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.264 AMD (h264_amf)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'h264_amf',
+          '-quality', 'speed',
+          '-rc', 'cqp',
+          '-qp_i', '23',
+          '-qp_p', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.265 NVIDIA (hevc_nvenc)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'hevc_nvenc',
+          '-preset', 'fast',
+          '-cq', '25',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.265 AMD (hevc_amf)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'hevc_amf',
+          '-quality', 'speed',
+          '-rc', 'cqp',
+          '-qp_i', '25',
+          '-qp_p', '25',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 ultrafast preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 fast preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 medium preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'medium',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Software fallback (basic)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-b:v', '1M',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      }
+    ];
+  }
+
+  /**
+   * Compress video with fallback encoders
    */
   private async compressVideo(buffer: Buffer, originalName: string): Promise<Buffer> {
     let tempDir: string;
@@ -218,84 +321,126 @@ export class UploadService implements OnModuleInit {
       this.logger.debug(`Input path: ${tempInputPath}`);
       this.logger.debug(`Output path: ${tempOutputPath}`);
 
-      return new Promise((resolve, reject) => {
-        const ffmpegCommand = Ffmpeg(tempInputPath)
-          .outputOptions([
-            '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-movflags', '+faststart',
-          ])
-          .output(tempOutputPath)
-          .on('start', (commandLine) => {
-            this.logger.debug(`FFmpeg command: ${commandLine}`);
-          })
-          .on('progress', (progress) => {
-            if (progress.percent) {
-              this.logger.debug(`Compression progress: ${progress.percent.toFixed(1)}%`);
-            }
-          })
-          .on('end', async () => {
-            try {
-              const compressed = await readFile(tempOutputPath);
+      // Get optimized encoder configs based on available hardware
+      const encoderConfigs = await this.getOptimizedEncoderConfigs();
 
-              this.logger.log(
-                `Video compressed: ${buffer.length} bytes -> ${compressed.length} bytes (${Math.round((1 - compressed.length / buffer.length) * 100)}% reduction)`,
-              );
-
-              // Clean up temp directory
-              await TempDirManager.cleanupTempDir(tempDir);
-
-              resolve(compressed);
-            } catch (error) {
-              this.logger.error('Error reading compressed video:', error);
-              await TempDirManager.cleanupTempDir(tempDir);
-              reject(error);
-            }
-          })
-          .on('error', async (error, stdout, stderr) => {
-            this.logger.error('FFmpeg compression error:', {
-              error: error.message,
-              code: error['code'],
-              inputPath: tempInputPath,
-              outputPath: tempOutputPath,
-              tempDir: tempDir,
-              stdout: stdout || 'none',
-              stderr: stderr || 'none',
-            });
-
-            // Clean up temp directory on error
+      // Try each encoder configuration
+      for (let i = 0; i < encoderConfigs.length; i++) {
+        const config = encoderConfigs[i];
+        try {
+          this.logger.log(`[${i+1}/${encoderConfigs.length}] Attempting compression with ${config.name}...`);
+          
+          // Set different timeouts based on encoder type
+          const isHardware = config.name.includes('Hardware') || config.name.includes('nvenc') || config.name.includes('amf');
+          const timeoutMinutes = isHardware ? 3 : 8; // Hardware: 3 min, Software: 8 min
+          
+          const startTime = Date.now();
+          const result = await this.tryCompressionWithConfig(
+            tempInputPath, 
+            tempOutputPath, 
+            config.options, 
+            buffer.length,
+            timeoutMinutes
+          );
+          const compressionTime = ((Date.now() - startTime) / 1000).toFixed(1);
+          
+          // Clean up temp directory on success
+          await TempDirManager.cleanupTempDir(tempDir);
+          
+          this.logger.log(`✅ Successfully compressed video using ${config.name} in ${compressionTime}s`);
+          return result;
+        } catch (error) {
+          this.logger.warn(`❌ Compression failed with ${config.name}: ${error.message}`);
+          
+          // If this is the last config, clean up and return original
+          if (i === encoderConfigs.length - 1) {
             await TempDirManager.cleanupTempDir(tempDir);
+            this.logger.warn('All compression methods failed, returning original video');
+            return buffer;
+          }
+          
+          // Otherwise, continue to next configuration
+          continue;
+        }
+      }
 
-            reject(new Error(
-              `ffmpeg exited with code ${error['code']}: Conversion failed!\n` +
-              `Input: ${tempInputPath}\n` +
-              `Output: ${tempOutputPath}\n` +
-              `stdout: ${stdout || 'none'}\n` +
-              `stderr: ${stderr || 'none'}`
-            ));
+      // This shouldn't be reached, but just in case
+      return buffer;
+
+    } catch (error) {
+      // Ensure cleanup on any error
+      if (tempDir) {
+        await TempDirManager.cleanupTempDir(tempDir);
+      }
+      
+      this.logger.error('Video compression setup failed:', error);
+      
+      // Return original buffer if setup fails
+      this.logger.warn('Returning original video due to setup failure');
+      return buffer;
+    }
+  }
+
+  /**
+   * Try compression with specific configuration
+   */
+  private async tryCompressionWithConfig(
+    inputPath: string, 
+    outputPath: string, 
+    options: string[], 
+    originalSize: number,
+    timeoutMinutes: number = 10
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const ffmpegCommand = Ffmpeg(inputPath)
+        .outputOptions(options)
+        .output(outputPath)
+        .on('start', (commandLine) => {
+          this.logger.debug(`FFmpeg command: ${commandLine}`);
+        })
+        .on('progress', (progress) => {
+          if (progress.percent) {
+            this.logger.debug(`Compression progress: ${progress.percent.toFixed(1)}%`);
+          }
+        })
+        .on('end', async () => {
+          try {
+            const compressed = await readFile(outputPath);
+
+            this.logger.log(
+              `Video compressed: ${originalSize} bytes -> ${compressed.length} bytes (${Math.round((1 - compressed.length / originalSize) * 100)}% reduction)`,
+            );
+
+            resolve(compressed);
+          } catch (error) {
+            this.logger.error('Error reading compressed video:', error);
+            reject(error);
+          }
+        })
+        .on('error', (error, stdout, stderr) => {
+          this.logger.debug('FFmpeg error details:', {
+            error: error.message,
+            code: error['code'],
+            stdout: stdout || 'none',
+            stderr: (stderr || '').substring(0, 200) + '...',
           });
 
-        // Set timeout for compression (5 minutes)
-        const timeout = setTimeout(() => {
-          ffmpegCommand.kill('SIGKILL');
-          TempDirManager.cleanupTempDir(tempDir).catch(() => { });
-          reject(new Error('Video compression timed out after 5 minutes'));
-        }, 5 * 60 * 1000);
+          reject(new Error(
+            `FFmpeg failed: ${error.message}`
+          ));
+        });
 
-        ffmpegCommand.on('end', () => clearTimeout(timeout));
-        ffmpegCommand.on('error', () => clearTimeout(timeout));
+      // Set timeout for compression based on encoder type
+      const timeout = setTimeout(() => {
+        ffmpegCommand.kill('SIGKILL');
+        reject(new Error(`Video compression timeout (${timeoutMinutes} minutes)`));
+      }, timeoutMinutes * 60 * 1000);
 
-        ffmpegCommand.run();
-      });
-    } catch (error) {
-      this.logger.error('Error setting up video compression:', error);
-      if (tempDir) await TempDirManager.cleanupTempDir(tempDir);
-      throw new Error(`Failed to compress video: ${error.message}`);
-    }
+      ffmpegCommand.on('end', () => clearTimeout(timeout));
+      ffmpegCommand.on('error', () => clearTimeout(timeout));
+
+      ffmpegCommand.run();
+    });
   }
 
   /**
@@ -1087,6 +1232,8 @@ export class UploadService implements OnModuleInit {
       }),
       contentType: 'application/json',
       attributes: [
+        { key: 'id', value: entityId },
+        { key: 'createdAt', value: Date.now().toString() },
         { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
         { key: 'fileName', value: metadata.fileName },
         { key: 'mimeType', value: metadata.mimeType },
@@ -1108,268 +1255,128 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Upload video with DASH conversion
+   * Update entity on Arkiv Network
    */
-  async uploadVideoWithDash(
-    file: Express.Multer.File,
+  async updateEntity(
+    entityKey: string,
     userId: string,
-    resolutions: string[] = ['1080p', '720p', '480p', '360p'],
-  ): Promise<{
-    fileId: string;
-    manifestUrl: string;
-    duration: number;
-    resolutions: string[];
-    totalSegments: number;
-  }> {
-    this.logger.log(
-      `Uploading video with DASH conversion: ${file.originalname}`,
-    );
-
-    // Crear registro inicial del archivo
-    const fileRecord = await this.prisma.file.create({
-      data: {
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        encoding: file.encoding,
-        userId,
-        isDashVideo: true,
-        processingStatus: 'processing',
-      },
-    });
-
-    try {
-      // Convertir a DASH
-      this.logger.log('Converting video to DASH format...');
-      const dashResult = await this.dashConverter.convertToDash(
-        file.buffer,
-        file.originalname,
-        resolutions,
-      );
-
-      // Subir manifest a Arkiv
-      this.logger.log('Uploading DASH manifest to Arkiv...');
-      const manifestBuffer = Buffer.from(dashResult.manifestContent, 'utf-8');
-
-      let manifestAddress: string;
-
-      // Si el manifest es mayor a 16KB, dividirlo en chunks
-      if (manifestBuffer.length > this.CHUNK_SIZE) {
-        this.logger.log(`Manifest is ${manifestBuffer.length} bytes, splitting into chunks...`);
-
-        const manifestChunks = this.chunkBuffer(manifestBuffer, this.CHUNK_SIZE);
-        const manifestChunkAddresses: string[] = [];
-
-        for (let i = 0; i < manifestChunks.length; i++) {
-          const chunkUpload = await this.simpleUploadToArkiv(manifestChunks[i], {
-            fileName: `${file.originalname}.mpd_chunk${i}`,
-            mimeType: 'application/dash+xml',
-            size: manifestChunks[i].length,
-            chunkIndex: i,
-            totalChunks: manifestChunks.length,
-            userId,
-          });
-          manifestChunkAddresses.push(chunkUpload.entityKey);
-        }
-
-        manifestAddress = manifestChunkAddresses[0]; // Primera dirección como referencia
-        this.logger.log(`Manifest uploaded in ${manifestChunks.length} chunks`);
-      } else {
-        // Manifest pequeño, subir directamente
-        const manifestUpload = await this.simpleUploadToArkiv(manifestBuffer, {
-          fileName: `${file.originalname}.mpd`,
-          mimeType: 'application/dash+xml',
-          size: manifestBuffer.length,
-          userId,
-        });
-        manifestAddress = manifestUpload.entityKey;
-      }
-
-      // Subir todos los segmentos a Arkiv con control de concurrencia
-      this.logger.log(
-        `Uploading ${dashResult.segments.length} segments to Arkiv with controlled concurrency...`,
-      );
-
-      const segmentUploadPromises = dashResult.segments.map(async (segment, segmentIdx) => {
-        // Add small delay between uploads to prevent nonce conflicts
-        await new Promise(resolve => setTimeout(resolve, segmentIdx * 100));
-        const segmentBuffer = await readFile(segment.path);
-
-        // Si el segmento es mayor a 16KB, dividirlo en chunks
-        if (segmentBuffer.length > this.CHUNK_SIZE) {
-          this.logger.log(
-            `Segment ${segment.index} (${segment.resolution}) is ${segmentBuffer.length} bytes, splitting into chunks...`,
-          );
-
-          const chunks = this.chunkBuffer(segmentBuffer, this.CHUNK_SIZE);
-
-          // Subir todos los chunks del segmento en paralelo
-          const chunkUploadPromises = chunks.map((chunk, i) =>
-            this.simpleUploadToArkiv(chunk, {
-              fileName: `${file.originalname}_${segment.resolution}_${segment.index}_chunk${i}`,
-              mimeType: 'video/mp4',
-              size: chunk.length,
-              chunkIndex: i,
-              totalChunks: chunks.length,
-              userId,
-            }).then(result => ({ ...result, index: i }))
-          );
-
-          const chunkResults = await Promise.all(chunkUploadPromises);
-          chunkResults.sort((a, b) => a.index - b.index);
-
-          this.logger.log(
-            `Uploaded segment ${segment.index} (${segment.resolution}) in ${chunks.length} chunks`,
-          );
-
-          return {
-            segmentIndex: segment.index,
-            resolution: segment.resolution,
-            arkivAddress: chunkResults[0].entityKey,
-            duration: 4,
-            size: segment.size,
-            txHash: chunkResults[0].txHash,
-          };
-        } else {
-          // Segmento pequeño, subir directamente
-          const segmentUpload = await this.simpleUploadToArkiv(segmentBuffer, {
-            fileName: `${file.originalname}_${segment.resolution}_${segment.index}`,
-            mimeType: 'video/mp4',
-            size: segment.size,
-            userId,
-          });
-
-          this.logger.log(
-            `Uploaded segment ${segment.index} (${segment.resolution}) - ${segmentUpload.entityKey}`,
-          );
-
-          return {
-            segmentIndex: segment.index,
-            resolution: segment.resolution,
-            arkivAddress: segmentUpload.entityKey,
-            duration: 4,
-            size: segment.size,
-            txHash: segmentUpload.txHash,
-          };
-        }
-      });
-
-      const segmentRecords = await Promise.all(segmentUploadPromises);
-      this.logger.log(`All ${dashResult.segments.length} segments uploaded successfully`);
-
-      // Extract workDir from first segment path and cleanup
-      if (dashResult.segments.length > 0) {
-        const firstSegmentPath = dashResult.segments[0].path;
-        const workDir = firstSegmentPath.substring(0, firstSegmentPath.lastIndexOf('/') || firstSegmentPath.lastIndexOf('\\'));
-
-        // Cleanup temp directory after segments are uploaded
-        await TempDirManager.cleanupTempDir(workDir).catch((error) => {
-          this.logger.warn(`Failed to cleanup DASH work directory ${workDir}:`, error.message);
-        });
-        this.logger.log(`Cleaned up DASH work directory: ${workDir}`);
-      }
-
-      // Actualizar el registro del archivo con toda la información
-      await this.prisma.file.update({
-        where: { id: fileRecord.id },
-        data: {
-          dashManifest: dashResult.manifestContent,
-          dashManifestUrl: manifestAddress,
-          videoDuration: dashResult.duration,
-          videoResolutions: JSON.stringify(dashResult.resolutions),
-          processingStatus: 'completed',
-          arkivAddress: manifestAddress,
-          videoSegments: {
-            create: segmentRecords,
-          },
-        },
-      });
-
-      this.logger.log(
-        `Video processing completed successfully: ${fileRecord.id}`,
-      );
-
-      return {
-        fileId: fileRecord.id,
-        manifestUrl: manifestAddress,
-        duration: dashResult.duration,
-        resolutions: dashResult.resolutions,
-        totalSegments: dashResult.segments.length,
-      };
-    } catch (error) {
-      this.logger.error('Error processing video with DASH:', error);
-
-      // Actualizar el estado a fallido
-      await this.prisma.file.update({
-        where: { id: fileRecord.id },
-        data: {
-          processingStatus: 'failed',
-        },
-      });
-
-      throw new Error(`Failed to process video with DASH: ${error.message}`);
-    }
-  }
-
-  /**
-   * Get video manifest
-   */
-  async getVideoManifest(fileId: string, userId: string): Promise<string> {
+    updateData: {
+      title?: string;
+      content?: string;
+      description?: string;
+      [key: string]: any;
+    },
+    expirationHours: number = 24,
+  ): Promise<{ entityKey: string; txHash: string }> {
+    // Verify that the user owns this entity
     const file = await this.prisma.file.findFirst({
       where: {
-        id: fileId,
+        arkivAddress: entityKey,
         userId,
-        isDashVideo: true,
       },
     });
 
     if (!file) {
-      throw new Error('Video not found');
+      throw new Error('Entity not found or you do not have permission to update it');
     }
 
-    if (!file.dashManifest) {
-      throw new Error('Video manifest not available');
-    }
-
-    return file.dashManifest;
-  }
-
-  /**
-   * Get video streaming info
-   */
-  async getVideoStreamingInfo(fileId: string, userId: string) {
-    const file = await this.prisma.file.findFirst({
-      where: {
-        id: fileId,
-        userId,
-        isDashVideo: true,
-      },
-      include: {
-        videoSegments: {
-          orderBy: [{ resolution: 'desc' }, { segmentIndex: 'asc' }],
-        },
-      },
-    });
-
-    if (!file) {
-      throw new Error('Video not found');
-    }
-
-    return {
-      fileId: file.id,
-      originalName: file.originalName,
-      duration: file.videoDuration,
-      resolutions: JSON.parse(file.videoResolutions || '[]'),
-      manifestUrl: file.dashManifestUrl,
-      processingStatus: file.processingStatus,
-      segments: file.videoSegments.map((seg) => ({
-        index: seg.segmentIndex,
-        resolution: seg.resolution,
-        arkivAddress: seg.arkivAddress,
-        duration: seg.duration,
-        size: seg.size,
-      })),
+    const wallet = this.getNextWallet();
+    
+    // Prepare the update payload
+    const updatedPayload = {
+      ...updateData,
+      updatedAt: Date.now(),
+      lastUpdatedBy: userId,
     };
+
+    const result = await wallet.updateEntity({
+      entityKey,
+      payload: jsonToPayload(updatedPayload),
+      contentType: 'application/json',
+      attributes: [
+        { key: 'type', value: 'file' },
+        { key: 'updated', value: Date.now().toString() },
+        { key: 'updatedBy', value: userId },
+        ...(updateData.title ? [{ key: 'title', value: updateData.title }] : []),
+        ...(updateData.description ? [{ key: 'description', value: updateData.description }] : []),
+      ],
+      expiresIn: ExpirationTime.fromHours(expirationHours),
+    });
+
+    // Update the file record in database
+    await this.prisma.file.update({
+      where: { id: file.id },
+      data: {
+        updatedAt: new Date(),
+      },
+    });
+
+    this.logger.log(`Entity ${entityKey} updated by user ${userId}`);
+    
+    return {
+      entityKey,
+      txHash: result.txHash,
+    };
+  }
+
+  /**
+   * Query entities using the new query system
+   */
+  async queryEntities(
+    filters: {
+      type?: string;
+      userId?: string;
+      fileName?: string;
+      [key: string]: any;
+    },
+    options: {
+      withAttributes?: boolean;
+      withPayload?: boolean;
+      limit?: number;
+    } = {},
+  ) {
+    const { eq } = await import('@arkiv-network/sdk/query');
+    
+    const query = this.publicClient.buildQuery();
+    
+    // Apply filters
+    if (filters.type) {
+      query.where(eq('type', filters.type));
+    }
+    
+    if (filters.userId) {
+      query.where(eq('userId', filters.userId));
+    }
+    
+    if (filters.fileName) {
+      query.where(eq('fileName', filters.fileName));
+    }
+    
+    // Apply additional filters
+    Object.entries(filters).forEach(([key, value]) => {
+      if (key !== 'type' && key !== 'userId' && key !== 'fileName' && value !== undefined) {
+        query.where(eq(key, value));
+      }
+    });
+    
+    // Apply options
+    if (options.withAttributes) {
+      query.withAttributes(true);
+    }
+    
+    if (options.withPayload) {
+      query.withPayload(true);
+    }
+    
+    if (options.limit) {
+      query.limit(options.limit);
+    }
+    
+    const results = await query.fetch();
+    
+    this.logger.log(`Query returned ${results.length} entities`);
+    
+    return results;
   }
 
   /**

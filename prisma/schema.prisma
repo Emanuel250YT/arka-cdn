@@ -129,19 +129,10 @@ model File {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  // DASH Streaming fields
-  isDashVideo      Boolean @default(false) // Indica si es un video convertido a DASH
-  dashManifest     String? // MPD manifest content
-  dashManifestUrl  String? // URL del manifest en Arkiv
-  videoDuration    Float? // Duración del video en segundos
-  videoResolutions String? // JSON array de resoluciones disponibles ["1080p", "720p", "480p", "360p"]
-  processingStatus String  @default("pending") // pending, processing, completed, failed
-
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  chunks        FileChunk[]
-  videoSegments VideoSegment[]
+  chunks FileChunk[]
 
   @@map("files")
 }
@@ -163,19 +154,3 @@ model FileChunk {
   @@map("file_chunks")
 }
 
-model VideoSegment {
-  id           String   @id @default(uuid())
-  segmentIndex Int
-  resolution   String // "1080p", "720p", "480p", "360p"
-  arkivAddress String
-  duration     Float // Duración del segmento en segundos
-  size         Int
-  txHash       String?
-  createdAt    DateTime @default(now())
-
-  fileId String
-  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
-
-  @@unique([fileId, segmentIndex, resolution])
-  @@map("video_segments")
-}
