@@ -14,9 +14,9 @@ async function bootstrap() {
   app.use(express.json({ limit: '500mb' }));
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
-  // Enable CORS
+  // Enable CORS - Allow all origins
   app.enableCors({
-    origin: ['https://arka.openleague.pro', 'http://localhost:3000', 'http://localhost:5173'],
+    origin: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true,
