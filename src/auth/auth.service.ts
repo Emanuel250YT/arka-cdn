@@ -274,6 +274,24 @@ export class AuthService {
     const refreshExpiresAt = new Date();
     refreshExpiresAt.setDate(refreshExpiresAt.getDate() + 7);
 
+    await this.prisma.token.deleteMany({
+      where: {
+        userId: user.id,
+        expiresAt: {
+          lt: new Date(),
+        },
+      },
+    });
+
+    await this.prisma.token.deleteMany({
+      where: {
+        userId: user.id,
+        expiresAt: {
+          lt: new Date(),
+        },
+      },
+    });
+
     // Eliminar tokens anteriores del usuario para evitar conflictos
     await this.prisma.token.deleteMany({
       where: { 
@@ -298,6 +316,7 @@ export class AuthService {
           userId: user.id,
         },
       ],
+      skipDuplicates: true,
     });
 
     return {
