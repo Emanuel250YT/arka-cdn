@@ -570,7 +570,7 @@ export class UploadController {
   // ===== DASH VIDEO STREAMING ENDPOINTS =====
   // TEMPORALMENTE DESHABILITADOS
 
-  /*
+
   @Post('video/dash')
   @ApiOperation({
     summary: 'Upload video with DASH conversion',
@@ -781,7 +781,7 @@ export class UploadController {
       );
     }
   }
-  */
+
 
   @Get('stats/wallet-pool')
   @ApiOperation({
