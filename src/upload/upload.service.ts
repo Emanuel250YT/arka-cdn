@@ -196,7 +196,112 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Compress and resize video to max 1080p
+   * Get optimized encoder configurations based on speed priority and hardware detection
+   */
+  private async getOptimizedEncoderConfigs(): Promise<Array<{name: string, options: string[]}>> {
+    return [
+      {
+        name: 'Hardware H.264 NVIDIA (h264_nvenc)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'h264_nvenc',
+          '-preset', 'fast',
+          '-cq', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.264 AMD (h264_amf)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'h264_amf',
+          '-quality', 'speed',
+          '-rc', 'cqp',
+          '-qp_i', '23',
+          '-qp_p', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.265 NVIDIA (hevc_nvenc)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'hevc_nvenc',
+          '-preset', 'fast',
+          '-cq', '25',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Hardware H.265 AMD (hevc_amf)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'hevc_amf',
+          '-quality', 'speed',
+          '-rc', 'cqp',
+          '-qp_i', '25',
+          '-qp_p', '25',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 ultrafast preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 fast preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'libx264 medium preset (H.264)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-c:v', 'libx264',
+          '-preset', 'medium',
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      },
+      {
+        name: 'Software fallback (basic)',
+        options: [
+          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-b:v', '1M',
+          '-b:a', '128k',
+          '-movflags', '+faststart',
+        ]
+      }
+    ];
+  }
+
+  /**
+   * Compress video with fallback encoders
    */
   private async compressVideo(buffer: Buffer, originalName: string): Promise<Buffer> {
     let tempDir: string;
@@ -216,84 +321,126 @@ export class UploadService implements OnModuleInit {
       this.logger.debug(`Input path: ${tempInputPath}`);
       this.logger.debug(`Output path: ${tempOutputPath}`);
 
-      return new Promise((resolve, reject) => {
-        const ffmpegCommand = Ffmpeg(tempInputPath)
-          .outputOptions([
-            '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-movflags', '+faststart',
-          ])
-          .output(tempOutputPath)
-          .on('start', (commandLine) => {
-            this.logger.debug(`FFmpeg command: ${commandLine}`);
-          })
-          .on('progress', (progress) => {
-            if (progress.percent) {
-              this.logger.debug(`Compression progress: ${progress.percent.toFixed(1)}%`);
-            }
-          })
-          .on('end', async () => {
-            try {
-              const compressed = await readFile(tempOutputPath);
+      // Get optimized encoder configs based on available hardware
+      const encoderConfigs = await this.getOptimizedEncoderConfigs();
 
-              this.logger.log(
-                `Video compressed: ${buffer.length} bytes -> ${compressed.length} bytes (${Math.round((1 - compressed.length / buffer.length) * 100)}% reduction)`,
-              );
-
-              // Clean up temp directory
-              await TempDirManager.cleanupTempDir(tempDir);
-
-              resolve(compressed);
-            } catch (error) {
-              this.logger.error('Error reading compressed video:', error);
-              await TempDirManager.cleanupTempDir(tempDir);
-              reject(error);
-            }
-          })
-          .on('error', async (error, stdout, stderr) => {
-            this.logger.error('FFmpeg compression error:', {
-              error: error.message,
-              code: error['code'],
-              inputPath: tempInputPath,
-              outputPath: tempOutputPath,
-              tempDir: tempDir,
-              stdout: stdout || 'none',
-              stderr: stderr || 'none',
-            });
-
-            // Clean up temp directory on error
+      // Try each encoder configuration
+      for (let i = 0; i < encoderConfigs.length; i++) {
+        const config = encoderConfigs[i];
+        try {
+          this.logger.log(`[${i+1}/${encoderConfigs.length}] Attempting compression with ${config.name}...`);
+          
+          // Set different timeouts based on encoder type
+          const isHardware = config.name.includes('Hardware') || config.name.includes('nvenc') || config.name.includes('amf');
+          const timeoutMinutes = isHardware ? 3 : 8; // Hardware: 3 min, Software: 8 min
+          
+          const startTime = Date.now();
+          const result = await this.tryCompressionWithConfig(
+            tempInputPath, 
+            tempOutputPath, 
+            config.options, 
+            buffer.length,
+            timeoutMinutes
+          );
+          const compressionTime = ((Date.now() - startTime) / 1000).toFixed(1);
+          
+          // Clean up temp directory on success
+          await TempDirManager.cleanupTempDir(tempDir);
+          
+          this.logger.log(`✅ Successfully compressed video using ${config.name} in ${compressionTime}s`);
+          return result;
+        } catch (error) {
+          this.logger.warn(`❌ Compression failed with ${config.name}: ${error.message}`);
+          
+          // If this is the last config, clean up and return original
+          if (i === encoderConfigs.length - 1) {
             await TempDirManager.cleanupTempDir(tempDir);
+            this.logger.warn('All compression methods failed, returning original video');
+            return buffer;
+          }
+          
+          // Otherwise, continue to next configuration
+          continue;
+        }
+      }
 
-            reject(new Error(
-              `ffmpeg exited with code ${error['code']}: Conversion failed!\n` +
-              `Input: ${tempInputPath}\n` +
-              `Output: ${tempOutputPath}\n` +
-              `stdout: ${stdout || 'none'}\n` +
-              `stderr: ${stderr || 'none'}`
-            ));
+      // This shouldn't be reached, but just in case
+      return buffer;
+
+    } catch (error) {
+      // Ensure cleanup on any error
+      if (tempDir) {
+        await TempDirManager.cleanupTempDir(tempDir);
+      }
+      
+      this.logger.error('Video compression setup failed:', error);
+      
+      // Return original buffer if setup fails
+      this.logger.warn('Returning original video due to setup failure');
+      return buffer;
+    }
+  }
+
+  /**
+   * Try compression with specific configuration
+   */
+  private async tryCompressionWithConfig(
+    inputPath: string, 
+    outputPath: string, 
+    options: string[], 
+    originalSize: number,
+    timeoutMinutes: number = 10
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const ffmpegCommand = Ffmpeg(inputPath)
+        .outputOptions(options)
+        .output(outputPath)
+        .on('start', (commandLine) => {
+          this.logger.debug(`FFmpeg command: ${commandLine}`);
+        })
+        .on('progress', (progress) => {
+          if (progress.percent) {
+            this.logger.debug(`Compression progress: ${progress.percent.toFixed(1)}%`);
+          }
+        })
+        .on('end', async () => {
+          try {
+            const compressed = await readFile(outputPath);
+
+            this.logger.log(
+              `Video compressed: ${originalSize} bytes -> ${compressed.length} bytes (${Math.round((1 - compressed.length / originalSize) * 100)}% reduction)`,
+            );
+
+            resolve(compressed);
+          } catch (error) {
+            this.logger.error('Error reading compressed video:', error);
+            reject(error);
+          }
+        })
+        .on('error', (error, stdout, stderr) => {
+          this.logger.debug('FFmpeg error details:', {
+            error: error.message,
+            code: error['code'],
+            stdout: stdout || 'none',
+            stderr: (stderr || '').substring(0, 200) + '...',
           });
 
-        // Set timeout for compression (5 minutes)
-        const timeout = setTimeout(() => {
-          ffmpegCommand.kill('SIGKILL');
-          TempDirManager.cleanupTempDir(tempDir).catch(() => { });
-          reject(new Error('Video compression timed out after 5 minutes'));
-        }, 5 * 60 * 1000);
+          reject(new Error(
+            `FFmpeg failed: ${error.message}`
+          ));
+        });
 
-        ffmpegCommand.on('end', () => clearTimeout(timeout));
-        ffmpegCommand.on('error', () => clearTimeout(timeout));
+      // Set timeout for compression based on encoder type
+      const timeout = setTimeout(() => {
+        ffmpegCommand.kill('SIGKILL');
+        reject(new Error(`Video compression timeout (${timeoutMinutes} minutes)`));
+      }, timeoutMinutes * 60 * 1000);
 
-        ffmpegCommand.run();
-      });
-    } catch (error) {
-      this.logger.error('Error setting up video compression:', error);
-      if (tempDir) await TempDirManager.cleanupTempDir(tempDir);
-      throw new Error(`Failed to compress video: ${error.message}`);
-    }
+      ffmpegCommand.on('end', () => clearTimeout(timeout));
+      ffmpegCommand.on('error', () => clearTimeout(timeout));
+
+      ffmpegCommand.run();
+    });
   }
 
   /**
@@ -1085,6 +1232,8 @@ export class UploadService implements OnModuleInit {
       }),
       contentType: 'application/json',
       attributes: [
+        { key: 'id', value: entityId },
+        { key: 'createdAt', value: Date.now().toString() },
         { key: 'type', value: isChunk ? 'file-chunk' : 'file' },
         { key: 'fileName', value: metadata.fileName },
         { key: 'mimeType', value: metadata.mimeType },
@@ -1103,6 +1252,131 @@ export class UploadService implements OnModuleInit {
       entityKey: result.entityKey,
       txHash: result.txHash,
     };
+  }
+
+  /**
+   * Update entity on Arkiv Network
+   */
+  async updateEntity(
+    entityKey: string,
+    userId: string,
+    updateData: {
+      title?: string;
+      content?: string;
+      description?: string;
+      [key: string]: any;
+    },
+    expirationHours: number = 24,
+  ): Promise<{ entityKey: string; txHash: string }> {
+    // Verify that the user owns this entity
+    const file = await this.prisma.file.findFirst({
+      where: {
+        arkivAddress: entityKey,
+        userId,
+      },
+    });
+
+    if (!file) {
+      throw new Error('Entity not found or you do not have permission to update it');
+    }
+
+    const wallet = this.getNextWallet();
+    
+    // Prepare the update payload
+    const updatedPayload = {
+      ...updateData,
+      updatedAt: Date.now(),
+      lastUpdatedBy: userId,
+    };
+
+    const result = await wallet.updateEntity({
+      entityKey,
+      payload: jsonToPayload(updatedPayload),
+      contentType: 'application/json',
+      attributes: [
+        { key: 'type', value: 'file' },
+        { key: 'updated', value: Date.now().toString() },
+        { key: 'updatedBy', value: userId },
+        ...(updateData.title ? [{ key: 'title', value: updateData.title }] : []),
+        ...(updateData.description ? [{ key: 'description', value: updateData.description }] : []),
+      ],
+      expiresIn: ExpirationTime.fromHours(expirationHours),
+    });
+
+    // Update the file record in database
+    await this.prisma.file.update({
+      where: { id: file.id },
+      data: {
+        updatedAt: new Date(),
+      },
+    });
+
+    this.logger.log(`Entity ${entityKey} updated by user ${userId}`);
+    
+    return {
+      entityKey,
+      txHash: result.txHash,
+    };
+  }
+
+  /**
+   * Query entities using the new query system
+   */
+  async queryEntities(
+    filters: {
+      type?: string;
+      userId?: string;
+      fileName?: string;
+      [key: string]: any;
+    },
+    options: {
+      withAttributes?: boolean;
+      withPayload?: boolean;
+      limit?: number;
+    } = {},
+  ) {
+    const { eq } = await import('@arkiv-network/sdk/query');
+    
+    const query = this.publicClient.buildQuery();
+    
+    // Apply filters
+    if (filters.type) {
+      query.where(eq('type', filters.type));
+    }
+    
+    if (filters.userId) {
+      query.where(eq('userId', filters.userId));
+    }
+    
+    if (filters.fileName) {
+      query.where(eq('fileName', filters.fileName));
+    }
+    
+    // Apply additional filters
+    Object.entries(filters).forEach(([key, value]) => {
+      if (key !== 'type' && key !== 'userId' && key !== 'fileName' && value !== undefined) {
+        query.where(eq(key, value));
+      }
+    });
+    
+    // Apply options
+    if (options.withAttributes) {
+      query.withAttributes(true);
+    }
+    
+    if (options.withPayload) {
+      query.withPayload(true);
+    }
+    
+    if (options.limit) {
+      query.limit(options.limit);
+    }
+    
+    const results = await query.fetch();
+    
+    this.logger.log(`Query returned ${results.length} entities`);
+    
+    return results;
   }
 
   /**

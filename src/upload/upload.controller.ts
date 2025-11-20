@@ -4,6 +4,7 @@ import {
   Post,
   Get,
   Delete,
+  Put,
   Param,
   UseGuards,
   UseInterceptors,
@@ -17,6 +18,7 @@ import {
   Header,
   Res,
   StreamableFile,
+  Query,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -32,7 +34,7 @@ import {
 import { UploadService } from './upload.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { GetUser } from '../auth/decorators/get-user.decorator';
-import { UploadFileDto, UploadVideoDto } from './dto';
+import { UploadFileDto, UploadVideoDto, UpdateEntityDto } from './dto';
 
 @ApiTags('Upload')
 @ApiBearerAuth('JWT-auth')
@@ -729,6 +731,173 @@ Retrieves and downloads files by their UUID. The file is reassembled from its ch
       this.logger.error(`Error retrieving file ${uuid}:`, error);
       throw new BadRequestException(
         error.message || 'Failed to retrieve file',
+      );
+    }
+  }
+
+  @Put(':entityKey')
+  @ApiOperation({
+    summary: 'Update entity on Arkiv Network',
+    description: `Update an existing entity on Arkiv Network. You can only update entities that you own.
+    
+    **Features:**
+    - Update title, content, or description
+    - Add custom metadata
+    - Set new expiration time
+    - Maintain ownership validation
+    
+    **Note:** The entityKey is the Arkiv address returned when the entity was created.`,
+  })
+  @ApiParam({
+    name: 'entityKey',
+    description: 'The entity key (Arkiv address) of the entity to update',
+    type: 'string',
+  })
+  @ApiBody({
+    type: UpdateEntityDto,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Entity updated successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Entity updated successfully' },
+        data: {
+          type: 'object',
+          properties: {
+            entityKey: { type: 'string' },
+            txHash: { type: 'string' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Entity not found or access denied' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async updateEntity(
+    @Param('entityKey') entityKey: string,
+    @GetUser('id') userId: string,
+    @Body() updateEntityDto: UpdateEntityDto,
+  ) {
+    try {
+      this.logger.log(`User ${userId} updating entity: ${entityKey}`);
+
+      const { customData, expirationHours, ...updateData } = updateEntityDto;
+      const finalUpdateData = { ...updateData, ...customData };
+
+      const result = await this.uploadService.updateEntity(
+        entityKey,
+        userId,
+        finalUpdateData,
+        expirationHours,
+      );
+
+      return {
+        success: true,
+        message: 'Entity updated successfully',
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Update entity error:`, error);
+      throw new BadRequestException(
+        error.message || 'Failed to update entity',
+      );
+    }
+  }
+
+  @Get('query')
+  @ApiOperation({
+    summary: 'Query entities using Arkiv query system',
+    description: `Query entities on Arkiv Network using the new query system with filters.
+    
+    **Query Parameters:**
+    - type: Filter by entity type (e.g., 'file', 'file-chunk')
+    - userId: Filter by user ID
+    - fileName: Filter by file name
+    - withAttributes: Include attributes in response (default: true)
+    - withPayload: Include payload data in response (default: false)
+    - limit: Maximum number of results (default: 50)
+    
+    **Note:** Only returns entities you have access to read.`,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Entities retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean', example: true },
+        message: { type: 'string', example: 'Entities retrieved successfully' },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              entityKey: { type: 'string' },
+              attributes: { type: 'object' },
+              payload: { type: 'object' },
+              createdAt: { type: 'number' },
+            },
+          },
+        },
+        meta: {
+          type: 'object',
+          properties: {
+            total: { type: 'number' },
+            filters: { type: 'object' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async queryEntities(
+    @GetUser('id') userId: string,
+    @Query('type') type?: string,
+    @Query('fileName') fileName?: string,
+    @Query('withAttributes') withAttributes?: string,
+    @Query('withPayload') withPayload?: string,
+    @Query('limit') limit?: string,
+  ) {
+    try {
+      this.logger.log(`User ${userId} querying entities with filters:`, {
+        type,
+        fileName,
+        withAttributes,
+        withPayload,
+        limit,
+      });
+
+      const filters = {
+        userId, // Always filter by current user
+        ...(type && { type }),
+        ...(fileName && { fileName }),
+      };
+
+      const options = {
+        withAttributes: withAttributes !== 'false',
+        withPayload: withPayload === 'true',
+        limit: limit ? parseInt(limit, 10) : 50,
+      };
+
+      const entities = await this.uploadService.queryEntities(filters, options);
+
+      return {
+        success: true,
+        message: 'Entities retrieved successfully',
+        data: entities,
+        meta: {
+          total: entities.length,
+          filters,
+          options,
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Query entities error:`, error);
+      throw new BadRequestException(
+        error.message || 'Failed to query entities',
       );
     }
   }
