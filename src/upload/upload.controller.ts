@@ -630,7 +630,7 @@ export class DataController {
   constructor(private readonly uploadService: UploadService) { }
 
   @Get(':uuid')
-  @Header('Cache-Control', 'public, max-age=31536000, immutable')
+  @Header('Cache-Control', 'public, max-age=604800')
   @ApiOperation({
     summary: 'Get file by UUID (Public)',
     description: `**⚠️ PUBLIC ENDPOINT - No authentication required**
@@ -682,7 +682,7 @@ Retrieves and downloads files by their UUID. The file is reassembled from its ch
       },
       'Cache-Control': {
         description: 'Caching policy',
-        schema: { type: 'string', example: 'public, max-age=31536000, immutable' },
+        schema: { type: 'string', example: 'public, max-age=604800' },
       },
     },
   })
@@ -722,7 +722,7 @@ Retrieves and downloads files by their UUID. The file is reassembled from its ch
       res.setHeader('Content-Type', result.mimeType);
       res.setHeader('Content-Length', result.size);
       res.setHeader('Content-Disposition', `inline; filename="${result.originalName}"`);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', 'public, max-age=604800');
 
       // Convert base64 to buffer and send
       const fileBuffer = Buffer.from(result.fileData, 'base64');

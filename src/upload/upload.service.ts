@@ -10,6 +10,7 @@ import { ExpirationTime, jsonToPayload } from '@arkiv-network/sdk/utils';
 import sharp from 'sharp';
 import Ffmpeg from 'fluent-ffmpeg';
 import { writeFile, unlink, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes, randomUUID } from 'crypto';
@@ -25,10 +26,11 @@ export class UploadService implements OnModuleInit {
   private walletClients: any[] = [];
   private currentWalletIndex: number = 0;
   private readonly CHUNK_SIZE = 64 * 1024; // 16KB chunks
-  private readonly MAX_IMAGE_WIDTH = 1920; // 1080p width
-  private readonly MAX_IMAGE_HEIGHT = 1080; // 1080p height
+  private readonly CHUNK_FETCH_CONCURRENCY = parseInt(process.env.CHUNK_FETCH_CONCURRENCY || '10', 10); // concurrent fetches
+  private readonly MAX_IMAGE_WIDTH = 1920; // Max width for images (never upscale)
+  private readonly MAX_IMAGE_HEIGHT = 1080; // Max height for images (never upscale)
   private readonly IMAGE_QUALITY = 80; // Calidad de compresión
-  private readonly VIDEO_RESOLUTION = '1920x1080'; // Máximo 1080p
+  private readonly VIDEO_SCALE_FACTOR = 0.5; // Videos always scaled to 50% (e.g., 300x200 -> 150x100)
 
   constructor(
     private prisma: PrismaService,
@@ -126,6 +128,33 @@ export class UploadService implements OnModuleInit {
       const ffmpegCheck = await checkFFmpegInstalled();
       if (ffmpegCheck.installed) {
         this.logger.log(`FFmpeg detected: version ${ffmpegCheck.version}`);
+        
+        // Check available encoders
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        
+        try {
+          const { stdout } = await execPromise('ffmpeg -encoders 2>&1');
+          const hasLibx264 = stdout.includes('libx264');
+          const hasH264Nvenc = stdout.includes('h264_nvenc');
+          const hasH264Amf = stdout.includes('h264_amf');
+          const hasH264Qsv = stdout.includes('h264_qsv');
+          
+          this.logger.log('Available H.264 encoders:');
+          this.logger.log(`  - libx264 (software): ${hasLibx264 ? '✅' : '❌'}`);
+          this.logger.log(`  - h264_nvenc (NVIDIA): ${hasH264Nvenc ? '✅' : '❌'}`);
+          this.logger.log(`  - h264_amf (AMD): ${hasH264Amf ? '✅' : '❌'}`);
+          this.logger.log(`  - h264_qsv (Intel): ${hasH264Qsv ? '✅' : '❌'}`);
+          
+          if (!hasLibx264) {
+            this.logger.error('⚠️  WARNING: libx264 encoder not found! Video compression will fail.');
+            this.logger.error('   Your FFmpeg installation may be incomplete.');
+            this.logger.error('   Download a full FFmpeg build from: https://www.gyan.dev/ffmpeg/builds/');
+          }
+        } catch (error) {
+          this.logger.warn('Could not check FFmpeg encoders:', error.message);
+        }
       } else {
         this.logger.warn(
           'FFmpeg is not installed or not accessible. ' +
@@ -196,105 +225,113 @@ export class UploadService implements OnModuleInit {
   }
 
   /**
-   * Get optimized encoder configurations based on speed priority and hardware detection
+   * Get optimized encoder configurations based on video format and hardware detection
    */
-  private async getOptimizedEncoderConfigs(): Promise<Array<{name: string, options: string[]}>> {
+  private async getOptimizedEncoderConfigs(originalFormat: string): Promise<Array<{name: string, options: string[], outputExt: string}>> {
+    const isWebm = originalFormat.includes('webm');
+    const isAvi = originalFormat.includes('avi');
+    const isMov = originalFormat.includes('mov') || originalFormat.includes('quicktime');
+    const isMkv = originalFormat.includes('mkv') || originalFormat.includes('matroska');
+    
+    // Prefer WebM for better compression, fallback to MP4 if input is MP4
+    let outputExt = 'webm'; // Default to WebM for best compression
+    if (isAvi) outputExt = 'avi';
+    else if (isMov) outputExt = 'mov';
+    else if (isMkv) outputExt = 'mkv';
+    
     return [
+      // WebM with VP9 - Best compression (try first for all formats except specific ones)
       {
-        name: 'Hardware H.264 NVIDIA (h264_nvenc)',
+        name: 'VP9 WebM (best compression)',
+        outputExt: 'webm',
         options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'h264_nvenc',
-          '-preset', 'fast',
-          '-cq', '23',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
+          '-vf', 'scale=iw/2:ih/2',
+          '-c:v', 'libvpx-vp9',
+          '-crf', '35',
+          '-b:v', '0',
+          '-row-mt', '1',
+          '-cpu-used', '4',
+          '-c:a', 'libopus',
+          '-b:a', '32k',
+          '-ac', '1',
         ]
       },
       {
-        name: 'Hardware H.264 AMD (h264_amf)',
+        name: 'Hardware H.264 NVIDIA (ultra compression)',
+        outputExt,
         options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
+          '-vf', 'scale=iw/2:ih/2',
+          '-c:v', 'h264_nvenc',
+          '-preset', 'slow',
+          '-cq', '32',
+          '-b:v', '300k',
+          '-maxrate', '400k',
+          '-bufsize', '600k',
+          '-c:a', 'aac',
+          '-b:a', '48k',
+          '-ar', '22050',
+          '-ac', '1',
+          ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
+        ]
+      },
+      {
+        name: 'Hardware H.264 AMD (ultra compression)',
+        outputExt,
+        options: [
+          '-vf', 'scale=iw/2:ih/2',
           '-c:v', 'h264_amf',
           '-quality', 'speed',
-          '-rc', 'cqp',
-          '-qp_i', '23',
-          '-qp_p', '23',
+          '-rc', 'vbr_latency',
+          '-b:v', '300k',
+          '-maxrate', '400k',
+          '-qp_i', '35',
+          '-qp_p', '35',
           '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
+          '-b:a', '48k',
+          '-ar', '22050',
+          '-ac', '1',
+          ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
         ]
       },
       {
-        name: 'Hardware H.265 NVIDIA (hevc_nvenc)',
+        name: 'Hardware H.264 Intel QSV (ultra compression)',
+        outputExt,
         options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'hevc_nvenc',
-          '-preset', 'fast',
-          '-cq', '25',
+          '-vf', 'scale=iw/2:ih/2',
+          '-c:v', 'h264_qsv',
+          '-preset', 'veryfast',
+          '-global_quality', '32',
+          '-b:v', '300k',
+          '-maxrate', '400k',
           '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
+          '-b:a', '48k',
+          '-ar', '22050',
+          '-ac', '1',
+          ...(outputExt === 'mp4' || outputExt === 'mov' ? ['-movflags', '+faststart'] : []),
         ]
       },
       {
-        name: 'Hardware H.265 AMD (hevc_amf)',
+        name: 'libopenh264 (aggressive compression)',
+        outputExt,
         options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'hevc_amf',
-          '-quality', 'speed',
-          '-rc', 'cqp',
-          '-qp_i', '25',
-          '-qp_p', '25',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
+          '-vf', 'scale=iw/2:ih/2',
+          '-c:v', 'libopenh264',
+          '-b:v', '250k',
+          '-maxrate', '350k',
+          '-c:a', 'libmp3lame',
+          '-b:a', '48k',
+          '-ar', '22050',
+          '-ac', '1',
         ]
       },
       {
-        name: 'libx264 ultrafast preset (H.264)',
+        name: 'libopenh264 minimal (last resort)',
+        outputExt,
         options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'libx264',
-          '-preset', 'ultrafast',
-          '-crf', '23',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
-        ]
-      },
-      {
-        name: 'libx264 fast preset (H.264)',
-        options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-crf', '23',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
-        ]
-      },
-      {
-        name: 'libx264 medium preset (H.264)',
-        options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-c:v', 'libx264',
-          '-preset', 'medium',
-          '-crf', '23',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
-        ]
-      },
-      {
-        name: 'Software fallback (basic)',
-        options: [
-          '-vf', `scale='min(${this.MAX_IMAGE_WIDTH},iw)':'min(${this.MAX_IMAGE_HEIGHT},ih)':force_original_aspect_ratio=decrease`,
-          '-b:v', '1M',
-          '-b:a', '128k',
-          '-movflags', '+faststart',
+          '-vf', 'scale=iw/2:ih/2',
+          '-c:v', 'libopenh264',
+          '-b:v', '200k',
+          '-c:a', 'copy',
         ]
       }
     ];
@@ -302,6 +339,8 @@ export class UploadService implements OnModuleInit {
 
   /**
    * Compress video with fallback encoders
+   * Videos are always downscaled to 50% of original dimensions (e.g., 300x200 -> 150x100)
+   * Also applies aggressive compression (CRF/bitrate reduction) for maximum size savings
    */
   private async compressVideo(buffer: Buffer, originalName: string): Promise<Buffer> {
     let tempDir: string;
@@ -312,17 +351,19 @@ export class UploadService implements OnModuleInit {
       // Create temporary directory for this operation
       tempDir = await TempDirManager.createTempDir('video-compression');
       tempInputPath = TempDirManager.getTempFilePath(tempDir, `input-${originalName}`);
-      tempOutputPath = TempDirManager.getTempFilePath(tempDir, 'output.mp4');
+      // Output path will be updated per encoder config
+      tempOutputPath = TempDirManager.getTempFilePath(tempDir, 'output.tmp');
 
       // Write buffer to temp file
       await writeFile(tempInputPath, buffer);
 
       this.logger.log(`Compressing video: ${originalName} (${buffer.length} bytes) in ${tempDir}`);
-      this.logger.debug(`Input path: ${tempInputPath}`);
-      this.logger.debug(`Output path: ${tempOutputPath}`);
+      this.logger.log(`Input path: ${tempInputPath}`);
+      this.logger.log(`Output path: ${tempOutputPath}`);
+      this.logger.log(`Output directory exists: ${existsSync(tempDir)}`);
 
-      // Get optimized encoder configs based on available hardware
-      const encoderConfigs = await this.getOptimizedEncoderConfigs();
+      // Get optimized encoder configs based on available hardware and video format
+      const encoderConfigs = await this.getOptimizedEncoderConfigs(originalName);
 
       // Try each encoder configuration
       for (let i = 0; i < encoderConfigs.length; i++) {
@@ -330,14 +371,16 @@ export class UploadService implements OnModuleInit {
         try {
           this.logger.log(`[${i+1}/${encoderConfigs.length}] Attempting compression with ${config.name}...`);
           
-          // Set different timeouts based on encoder type
-          const isHardware = config.name.includes('Hardware') || config.name.includes('nvenc') || config.name.includes('amf');
-          const timeoutMinutes = isHardware ? 3 : 8; // Hardware: 3 min, Software: 8 min
+          // Update output path with correct extension
+          const configOutputPath = TempDirManager.getTempFilePath(tempDir, `output.${config.outputExt}`);
+          
+          // Set timeout: 10 minutes for all
+          const timeoutMinutes = 10;
           
           const startTime = Date.now();
           const result = await this.tryCompressionWithConfig(
             tempInputPath, 
-            tempOutputPath, 
+            configOutputPath, 
             config.options, 
             buffer.length,
             timeoutMinutes
@@ -352,11 +395,17 @@ export class UploadService implements OnModuleInit {
         } catch (error) {
           this.logger.warn(`❌ Compression failed with ${config.name}: ${error.message}`);
           
-          // If this is the last config, clean up and return original
+          // If this is the last config, throw error instead of returning original
           if (i === encoderConfigs.length - 1) {
             await TempDirManager.cleanupTempDir(tempDir);
-            this.logger.warn('All compression methods failed, returning original video');
-            return buffer;
+            this.logger.error('❌ ALL COMPRESSION METHODS FAILED!');
+            this.logger.error('Please ensure FFmpeg is installed and working correctly.');
+            this.logger.error('Install FFmpeg from: https://ffmpeg.org/download.html');
+            throw new Error(
+              'Video compression failed with all available encoders. ' +
+              'FFmpeg may not be installed or configured correctly. ' +
+              'Last error: ' + error.message
+            );
           }
           
           // Otherwise, continue to next configuration
@@ -373,11 +422,10 @@ export class UploadService implements OnModuleInit {
         await TempDirManager.cleanupTempDir(tempDir);
       }
       
-      this.logger.error('Video compression setup failed:', error);
+      this.logger.error('❌ Video compression setup/execution failed:', error.message);
       
-      // Return original buffer if setup fails
-      this.logger.warn('Returning original video due to setup failure');
-      return buffer;
+      // Throw error instead of returning original
+      throw new Error('Video compression failed: ' + error.message);
     }
   }
 
@@ -392,11 +440,15 @@ export class UploadService implements OnModuleInit {
     timeoutMinutes: number = 10
   ): Promise<Buffer> {
     return new Promise((resolve, reject) => {
+      this.logger.log(`Attempting FFmpeg with options: ${JSON.stringify(options)}`);
+      this.logger.log(`Input file exists: ${existsSync(inputPath)}`);
+      this.logger.log(`Output directory writable: ${existsSync(require('path').dirname(outputPath))}`);
+      
       const ffmpegCommand = Ffmpeg(inputPath)
         .outputOptions(options)
         .output(outputPath)
         .on('start', (commandLine) => {
-          this.logger.debug(`FFmpeg command: ${commandLine}`);
+          this.logger.log(`FFmpeg command: ${commandLine}`);
         })
         .on('progress', (progress) => {
           if (progress.percent) {
@@ -891,26 +943,9 @@ export class UploadService implements OnModuleInit {
     // If requested, retrieve actual data from Arkiv
     if (includeData && this.publicClient) {
       try {
-        const chunksData = [];
+        this.logger.log(`Fetching ${file.chunks.length} chunk(s) in parallel (concurrency=${this.CHUNK_FETCH_CONCURRENCY})`);
 
-        for (const chunk of file.chunks) {
-          this.logger.log(`Retrieving chunk ${chunk.chunkIndex} from Arkiv...`);
-          const entity = await this.publicClient.getEntity(chunk.arkivAddress);
-
-          if (entity && entity.payload) {
-            // Parse the JSON payload and extract the base64 data
-            const payloadStr = Buffer.from(entity.payload).toString('utf-8');
-            const payloadJson = JSON.parse(payloadStr);
-
-            if (payloadJson.data) {
-              const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
-              chunksData.push({
-                index: chunk.chunkIndex,
-                data: chunkBuffer,
-              });
-            }
-          }
-        }
+        const chunksData = await this.fetchChunksConcurrently(file.chunks, this.CHUNK_FETCH_CONCURRENCY);
 
         // Sort chunks by index and concatenate
         chunksData.sort((a, b) => a.index - b.index);
@@ -1016,36 +1051,8 @@ export class UploadService implements OnModuleInit {
 
     try {
       this.logger.log(`Reassembling file ${file.originalName} from ${file.chunks.length} chunks`);
-      const chunksData = [];
 
-      for (const chunk of file.chunks) {
-        this.logger.debug(`Retrieving chunk ${chunk.chunkIndex}/${file.chunks.length} from ${chunk.arkivAddress}`);
-
-        if (chunk.arkivAddress === 'pending' || chunk.uploadStatus !== 'completed') {
-          throw new Error(`File is not fully uploaded. Chunk ${chunk.chunkIndex} is ${chunk.uploadStatus}`);
-        }
-
-        const entity = await this.publicClient.getEntity(chunk.arkivAddress);
-
-        if (entity && entity.payload) {
-          // Parse the JSON payload and extract the base64 data
-          const payloadStr = Buffer.from(entity.payload).toString('utf-8');
-          const payloadJson = JSON.parse(payloadStr);
-
-          if (payloadJson.data) {
-            const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
-            chunksData.push({
-              index: chunk.chunkIndex,
-              data: chunkBuffer,
-            });
-            this.logger.debug(`Retrieved chunk ${chunk.chunkIndex}: ${chunkBuffer.length} bytes`);
-          } else {
-            throw new Error(`Chunk ${chunk.chunkIndex} has no data in payload`);
-          }
-        } else {
-          throw new Error(`Chunk ${chunk.chunkIndex} not found in Arkiv`);
-        }
-      }
+      const chunksData = await this.fetchChunksConcurrently(file.chunks, this.CHUNK_FETCH_CONCURRENCY);
 
       // Sort chunks by index and concatenate
       chunksData.sort((a, b) => a.index - b.index);
@@ -1112,25 +1119,7 @@ export class UploadService implements OnModuleInit {
     }
 
     try {
-      const chunksData = [];
-
-      for (const chunk of file.chunks) {
-        this.logger.log(`Retrieving chunk ${chunk.chunkIndex} from Arkiv...`);
-        const entity = await this.publicClient.getEntity(chunk.arkivAddress);
-
-        if (entity && entity.payload) {
-          const payloadStr = Buffer.from(entity.payload).toString('utf-8');
-          const payloadJson = JSON.parse(payloadStr);
-
-          if (payloadJson.data) {
-            const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
-            chunksData.push({
-              index: chunk.chunkIndex,
-              data: chunkBuffer,
-            });
-          }
-        }
-      }
+      const chunksData = await this.fetchChunksConcurrently(file.chunks, this.CHUNK_FETCH_CONCURRENCY);
 
       // Sort chunks by index and concatenate
       chunksData.sort((a, b) => a.index - b.index);
@@ -1151,6 +1140,60 @@ export class UploadService implements OnModuleInit {
       this.logger.error('Error retrieving text file from Arkiv:', error);
       throw new Error('Failed to retrieve text file from Arkiv');
     }
+  }
+
+  /**
+   * Fetch chunks concurrently with a limited concurrency pool.
+   * Returns an array of { index, data: Buffer }.
+   */
+  private async fetchChunksConcurrently(chunks: any[], concurrency: number): Promise<Array<{ index: number; data: Buffer }>> {
+    if (!this.publicClient) {
+      throw new Error('Arkiv public client not initialized');
+    }
+
+    const results: Array<{ index: number; data: Buffer } | null> = new Array(chunks.length).fill(null);
+    let current = 0;
+
+    const worker = async () => {
+      while (true) {
+        const idx = current++;
+        if (idx >= chunks.length) break;
+
+        const chunk = chunks[idx];
+        this.logger.debug(`Worker fetching chunk ${chunk.chunkIndex} (${idx + 1}/${chunks.length}) from ${chunk.arkivAddress}`);
+
+        if (chunk.arkivAddress === 'pending' || chunk.uploadStatus !== 'completed') {
+          throw new Error(`File is not fully uploaded. Chunk ${chunk.chunkIndex} is ${chunk.uploadStatus}`);
+        }
+
+        const entity = await this.publicClient.getEntity(chunk.arkivAddress);
+
+        if (!entity || !entity.payload) {
+          throw new Error(`Chunk ${chunk.chunkIndex} not found in Arkiv`);
+        }
+
+        const payloadStr = Buffer.from(entity.payload).toString('utf-8');
+        const payloadJson = JSON.parse(payloadStr);
+
+        if (!payloadJson.data) {
+          throw new Error(`Chunk ${chunk.chunkIndex} has no data in payload`);
+        }
+
+        const chunkBuffer = Buffer.from(payloadJson.data, 'base64');
+        results[idx] = { index: chunk.chunkIndex, data: chunkBuffer };
+      }
+    };
+
+    const workers = [];
+    const actualConcurrency = Math.max(1, Math.min(concurrency || this.CHUNK_FETCH_CONCURRENCY, chunks.length));
+    for (let i = 0; i < actualConcurrency; i++) {
+      workers.push(worker());
+    }
+
+    await Promise.all(workers);
+
+    // Filter out nulls (shouldn't be any) and return
+    return results.filter((r): r is { index: number; data: Buffer } => r !== null);
   }
 
   /**

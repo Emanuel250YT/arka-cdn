@@ -274,6 +274,15 @@ export class AuthService {
     const refreshExpiresAt = new Date();
     refreshExpiresAt.setDate(refreshExpiresAt.getDate() + 7);
 
+    // Eliminar tokens anteriores del usuario para evitar conflictos
+    await this.prisma.token.deleteMany({
+      where: { 
+        userId: user.id,
+        isRevoked: false 
+      },
+    });
+
+    // Crear nuevos tokens
     await this.prisma.token.createMany({
       data: [
         {
@@ -339,6 +348,15 @@ export class AuthService {
       // Guardar el nuevo access token
       const accessExpiresAt = new Date();
       accessExpiresAt.setMinutes(accessExpiresAt.getMinutes() + 15);
+
+      // Eliminar access tokens anteriores del usuario para evitar conflictos
+      await this.prisma.token.deleteMany({
+        where: { 
+          userId: payload.sub,
+          type: 'ACCESS',
+          isRevoked: false
+        },
+      });
 
       await this.prisma.token.create({
         data: {
