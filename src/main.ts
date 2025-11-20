@@ -15,7 +15,14 @@ async function bootstrap() {
   app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
   // Enable CORS
-  app.enableCors();
+  app.enableCors({
+    origin: ['https://arka.openleague.pro', 'http://localhost:3000', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  });
 
   // Global prefix
   app.setGlobalPrefix('api');
