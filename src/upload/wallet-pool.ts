@@ -1,127 +1,157 @@
-import { Logger } from '@nestjs/common';
-import { NonceManager } from './nonce-manager';
+/**
+ * WalletPool manages a rotating pool of Arkiv wallet clients.
+ *
+ * Arkiv (like most EVM chains) uses per-account nonces, so a single wallet
+ * can only submit one transaction at a time. Using N wallets lets us upload
+ * N chunks concurrently without nonce collisions.
+ *
+ * Wallets are assigned in strict round-robin order; the pool is thread-safe
+ * for concurrent JavaScript use (single-threaded event-loop).
+ *
+ * Uses `mutateEntities` for batched entity creation in a single transaction,
+ * which is far more efficient than issuing N individual `createEntity` calls.
+ */
+
+import type {
+  CreateEntityParameters,
+  MutateEntitiesParameters,
+  WalletArkivClient,
+} from '@arkiv-network/sdk'
+import type { WalletConfig } from '../types.js'
+
+// ────────────────────────────────────────────────────────────────────────────
+// Re-export SDK types used by the uploader so it doesn't import @arkiv-network/sdk
+// ────────────────────────────────────────────────────────────────────────────
+
+export type { CreateEntityParameters, MutateEntitiesParameters, WalletArkivClient }
+
+/** Convenience alias for a single entity creation params object */
+export type SdkCreateEntityParams = CreateEntityParameters
+
+/** Alias for mutateEntities params */
+export type SdkMutateEntitiesParams = MutateEntitiesParameters
+
+/** Shape of the mutateEntities return value we care about */
+export interface SdkMutateEntitiesResult {
+  txHash: string
+  createdEntities: string[]
+}
 
 /**
- * WalletPool manages multiple wallets and distributes transactions across them.
- * This allows for true parallel transaction execution at scale.
+ * The `WalletArkivClient` from the SDK uses `account.address`.
+ * We expose a thin adapter so the pool can expose a flat `.address` getter.
  */
+export type { WalletArkivClient as ArkivWalletClient }
+
+/**
+ * Factory function type that builds a wallet client from a config.
+ * Provided by the caller so the pool stays SDK-agnostic.
+ */
+export type WalletClientFactory = (
+  config: WalletConfig,
+) => WalletArkivClient | Promise<WalletArkivClient>
+
+// ────────────────────────────────────────────────────────────────────────────
+// WalletPool
+// ────────────────────────────────────────────────────────────────────────────
+
 export class WalletPool {
-  private readonly logger = new Logger(WalletPool.name);
-  private wallets: Array<{
-    client: any;
-    nonceManager: NonceManager;
-    address: string;
-    activeTransactions: number;
-  }> = [];
-  private currentIndex: number = 0;
+  private readonly clients: WalletArkivClient[]
+  private cursor = 0
 
-  constructor(walletClients: any[]) {
-    if (walletClients.length === 0) {
-      throw new Error('WalletPool requires at least one wallet');
-    }
+  private constructor(clients: WalletArkivClient[]) {
+    if (clients.length === 0)
+      throw new Error('WalletPool requires at least one wallet')
+    this.clients = clients
+  }
 
-    this.wallets = walletClients.map((client) => ({
-      client,
-      nonceManager: new NonceManager(client),
-      address: client.account.address,
-      activeTransactions: 0,
-    }));
+  // ── factory ────────────────────────────────────────────────────────────────
 
-    this.logger.log(`Initialized WalletPool with ${this.wallets.length} wallet(s)`);
-    this.wallets.forEach((wallet, i) => {
-      this.logger.log(`  Wallet ${i + 1}: ${wallet.address}`);
-    });
+  /**
+   * Builds a pool from an array of wallet configs and a factory function.
+   *
+   * ```ts
+   * const pool = await WalletPool.create(
+   *   [{ privateKey: '0x...' }],
+   *   ({ privateKey }) => createWalletClient({
+   *     account: privateKeyToAccount(privateKey),
+   *     chain: kaolin,
+   *     transport: http(),
+   *   }),
+   * )
+   * ```
+   */
+  /**
+   * Creates a pool from pre-built {@link WalletArkivClient} instances.
+   * The preferred constructor – works with MetaMask, private-key wallets, etc.
+   *
+   * ```ts
+   * const pool = WalletPool.fromClients([
+   *   createWalletClient({ chain: kaolin, transport: custom(window.ethereum) }),
+   *   createWalletClient({ account: privateKeyToAccount(key), chain: kaolin, transport: http() }),
+   * ])
+   * ```
+   */
+  static fromClients(clients: WalletArkivClient | WalletArkivClient[]): WalletPool {
+    const arr = Array.isArray(clients) ? clients : [clients]
+    return new WalletPool(arr)
   }
 
   /**
-   * Get the least busy wallet (round-robin with load balancing)
+   * Builds a pool from wallet configs and a factory function.
+   * Useful when you want to defer client construction.
    */
-  private getNextWallet() {
-    // Find wallet with least active transactions
-    let leastBusyIndex = 0;
-    let minTransactions = this.wallets[0].activeTransactions;
+  static async create(
+    configs: WalletConfig[],
+    factory: WalletClientFactory,
+  ): Promise<WalletPool> {
+    if (configs.length === 0)
+      throw new Error('At least one WalletConfig is required')
 
-    for (let i = 1; i < this.wallets.length; i++) {
-      if (this.wallets[i].activeTransactions < minTransactions) {
-        minTransactions = this.wallets[i].activeTransactions;
-        leastBusyIndex = i;
-      }
-    }
+    const clients = await Promise.all(configs.map(cfg => factory(cfg)))
+    return new WalletPool(clients)
+  }
 
-    // If all wallets have same load, use round-robin
-    if (minTransactions === this.wallets[0].activeTransactions) {
-      const wallet = this.wallets[this.currentIndex];
-      this.currentIndex = (this.currentIndex + 1) % this.wallets.length;
-      return wallet;
-    }
+  // ── public API ─────────────────────────────────────────────────────────────
 
-    return this.wallets[leastBusyIndex];
+  /** Total number of wallets in the pool */
+  get size(): number {
+    return this.clients.length
+  }
+
+  /** Addresses of all wallets in the pool */
+  get addresses(): string[] {
+    // WalletArkivClient extends viem's Client → account is the viem Account
+    return this.clients.map(c => c.account?.address ?? 'unknown')
   }
 
   /**
-   * Execute a transaction using the least busy wallet
+   * Returns the next wallet in round-robin order.
+   * Consecutive calls cycle through all wallets before repeating.
    */
-  async executeTransaction<T>(
-    fn: (client: any, nonce: number) => Promise<T>,
-    description?: string
-  ): Promise<{ result: T; walletAddress: string }> {
-    const wallet = this.getNextWallet();
-    wallet.activeTransactions++;
-
-    try {
-      const result = await wallet.nonceManager.executeWithNonce(
-        async (nonce) => {
-          const desc = description
-            ? `${description} [Wallet: ${wallet.address.slice(0, 8)}...]`
-            : `Transaction [Wallet: ${wallet.address.slice(0, 8)}...]`;
-
-          this.logger.debug(`Executing: ${desc}`);
-          return await fn(wallet.client, nonce);
-        },
-        description
-      );
-
-      wallet.activeTransactions--;
-      return {
-        result,
-        walletAddress: wallet.address,
-      };
-    } catch (error) {
-      wallet.activeTransactions--;
-      throw error;
-    }
+  next(): WalletArkivClient {
+    const client = this.clients[this.cursor % this.clients.length]
+    this.cursor = (this.cursor + 1) % this.clients.length
+    return client!
   }
 
   /**
-   * Get pool statistics
+   * Executes `task` with a wallet from the pool.
+   * Use this to automatically distribute work across wallets.
    */
-  getStats() {
-    return {
-      totalWallets: this.wallets.length,
-      wallets: this.wallets.map((wallet, index) => ({
-        index: index + 1,
-        address: wallet.address,
-        activeTransactions: wallet.activeTransactions,
-        state: wallet.nonceManager.getState(),
-      })),
-    };
+  async run<T>(task: (wallet: WalletArkivClient) => Promise<T>): Promise<T> {
+    const wallet = this.next()
+    return task(wallet)
   }
 
   /**
-   * Reset all nonce managers
+   * Runs `tasks` in parallel, distributing each task across pool wallets.
+   *
+   * Order of results matches the order of `tasks`.
    */
-  resetAll(): void {
-    this.logger.log('Resetting all wallet nonce managers');
-    this.wallets.forEach((wallet) => {
-      wallet.nonceManager.reset();
-      wallet.activeTransactions = 0;
-    });
-  }
-
-  /**
-   * Get total active transactions across all wallets
-   */
-  getTotalActiveTransactions(): number {
-    return this.wallets.reduce((sum, wallet) => sum + wallet.activeTransactions, 0);
+  async runAll<T>(
+    tasks: Array<(wallet: WalletArkivClient) => Promise<T>>,
+  ): Promise<T[]> {
+    return Promise.all(tasks.map(task => this.run(task)))
   }
 }

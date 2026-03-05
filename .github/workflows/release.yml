@@ -1,0 +1,80 @@
+name: Release
+
+# Triggered automatically when bumpp pushes a version tag (e.g. v0.2.0).
+# Run locally:  pnpm release
+# That command bumps package.json, commits, tags vX.Y.Z, and pushes — this
+# workflow then takes over: typecheck → test → build → npm publish → GitHub Release.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the GitHub Release
+  id-token: write # needed for npm provenance attestation
+
+jobs:
+  release:
+    name: Build, Publish & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Source ──────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the release notes can reference commits
+
+      # ── 2. Toolchain ───────────────────────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # ── 3. Install ─────────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── 4. Quality gates ───────────────────────────────────────────────────
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      # ── 5. Build dist/ ─────────────────────────────────────────────────────
+      - name: Build
+        run: pnpm build
+
+      # ── 6. Publish to npm ──────────────────────────────────────────────────
+      # NPM_TOKEN must be added to the repo's Secrets:
+      #   Repository → Settings → Secrets and variables → Actions → New secret
+      #   Name: NPM_TOKEN  Value: <your npm automation token>
+      - name: Publish to npm
+        run: pnpm publish --no-git-checks --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ── 7. GitHub Release with built artifacts ────────────────────────────
+      # Creates a release from the pushed tag and attaches a tarball of dist/.
+      - name: Pack dist tarball
+        id: pack
+        run: |
+          TARBALL=$(pnpm pack --pack-destination /tmp 2>/dev/null | tail -n1)
+          echo "path=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generates release notes from commits since the last tag
+          generate_release_notes: true
+          # Attach the npm tarball so the built dist/ is downloadable directly
+          # from the GitHub release page — no npm install required.
+          files: ${{ steps.pack.outputs.path }}
