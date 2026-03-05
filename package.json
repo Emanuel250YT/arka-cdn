@@ -1,6 +1,6 @@
 {
   "name": "arka-cdn",
-  "version": "0.1.2-beta.3",
+  "version": "0.1.2-beta.4",
   "description": "ArkaCDN – high-level CDN client for the Arkiv network: chunked uploads, multi-wallet, P2P AES encryption, browser + Node compatible.",
   "type": "module",
   "exports": {
