@@ -35,7 +35,7 @@ export type EntityKey = string
  */
 export interface ChunkAttributes {
   /** Zero-based chunk index */
-  part: number
+  chunk: number
   /** Total number of chunks for this file */
   total: number
   /** Unique UUID for THIS chunk – enables O(1) lookup */
@@ -57,7 +57,7 @@ export interface ChunkPayload {
 /** In-memory representation produced by the chunker */
 export interface Chunk {
   /** Zero-based index */
-  part: number
+  chunk: number
   /** Total chunks count */
   total: number
   /** Unique chunk UUID */
@@ -156,6 +156,13 @@ import type { MediaCompressOptions } from './compress/media-compressor.js'
 export type { MediaCompressOptions }
 
 export interface UploadOptions {
+  /**
+   * Optional entity UUID for the whole upload.
+   * When provided this UUID is used as the manifest `entityId`, letting callers
+   * reference the file with a known identifier before the upload completes.
+   * Must be a valid RFC-4122 UUID. Defaults to a randomly generated UUID.
+   */
+  entityId?: UUID
   /** Optional filename override (defaults to File/Blob name) */
   filename?: string
   /** Optional MIME-type override */

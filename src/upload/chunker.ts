@@ -37,7 +37,7 @@ export function split(
     const end = Math.min(start + maxBytes, data.length)
 
     chunks.push({
-      part,
+      chunk: part,
       total: totalChunks,
       uuid: generateUUID(),
       entity: entityId,
@@ -53,7 +53,7 @@ export function split(
  * Chunks MUST be sorted by `part` before calling this function.
  */
 export function assemble(chunks: Chunk[]): Uint8Array {
-  const sorted = [...chunks].sort((a, b) => a.part - b.part)
+  const sorted = [...chunks].sort((a, b) => a.chunk - b.chunk)
   const totalSize = sorted.reduce((sum, c) => sum + c.bytes.length, 0)
   const output = new Uint8Array(totalSize)
 

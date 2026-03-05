@@ -51,6 +51,14 @@ import type { WalletPool } from '../upload/wallet-pool.js'
 import { ArkaCDNEntityError } from '../errors.js'
 import { EntityWatcher } from './entity-watcher.js'
 import type { WatcherOptions } from './entity-watcher.js'
+import { DEFAULT_CHUNK_SIZE, split } from '../upload/chunker.js'
+import { generateUUID } from '../utils/uuid.js'
+import { toPayload } from '../upload/uploader.js'
+
+/** `arkiv-cdn` content-type for auto-chunked entity manifests. */
+const CHUNKED_ENTITY_CATEGORY = 'arkiv-cdn:chunked-entity'
+/** `arkiv-cdn` content-type for individual chunk entities. */
+const CHUNK_CATEGORY = 'arkiv-cdn:chunk'
 
 /** Wraps a promise, rethrowing all failures as {@link ArkaCDNEntityError}. */
 async function wrapEntityOp<T>(operation: string, fn: () => Promise<T>): Promise<T> {
@@ -76,6 +84,16 @@ export class EntityService {
   /**
    * Creates a new entity on-chain.
    *
+   * If the payload exceeds 64 KB (the Arkiv network payload limit) it is
+   * automatically split into multiple chunk entities. A lightweight manifest
+   * entity is stored as the "root" and its key is returned as `entityKey` —
+   * the caller never needs to handle chunking manually.
+   *
+   * Each chunk entity carries the attributes:
+   *  - `cdn.chunk`  — zero-based chunk index
+   *  - `cdn.uuid`   — unique UUID of this chunk
+   *  - `cdn.entity` — UUID of the parent (manifest) entity
+   *
    * @example
    * ```ts
    * const { entityKey, txHash } = await cdn.entity.create({
@@ -87,11 +105,66 @@ export class EntityService {
    * ```
    */
   create(params: CreateEntityParameters): Promise<CreateEntityReturnType> {
+    if (params.payload && params.payload.length > DEFAULT_CHUNK_SIZE)
+      return this._createChunked(params)
     return wrapEntityOp('create', () => this.pool.run(w => w.createEntity(params)))
+  }
+
+  /** @internal Auto-chunks a large payload across multiple entities. */
+  private async _createChunked(params: CreateEntityParameters): Promise<CreateEntityReturnType> {
+    const entityId = generateUUID()
+    const chunks = split(params.payload!, entityId)
+
+    const chunkCreates = chunks.map(c => ({
+      payload: toPayload({ data: Array.from(c.bytes).map(b => b.toString(16).padStart(2, '0')).join('') }),
+      contentType: CHUNK_CATEGORY,
+      expiresIn: params.expiresIn,
+      attributes: [
+        { key: 'cdn_chunk', value: c.chunk },
+        { key: 'cdn_total', value: c.total },
+        { key: 'cdn_uuid', value: c.uuid },
+        { key: 'cdn_entity', value: c.entity },
+        { key: 'cdn_encrypted', value: '0' },
+      ],
+    }))
+
+    const manifestCreate = {
+      payload: toPayload({
+        entityId,
+        totalChunks: chunks.length,
+        chunkUUIDs: chunks.map(c => c.uuid),
+        contentType: params.contentType,
+      }),
+      contentType: CHUNKED_ENTITY_CATEGORY,
+      expiresIn: params.expiresIn,
+      attributes: [
+        ...(params.attributes ?? []),
+        { key: 'cdn_entityId', value: entityId },
+        { key: 'cdn_totalChunks', value: chunks.length },
+        { key: 'cdn_chunked', value: '1' },
+      ],
+    }
+
+    return wrapEntityOp('create', () =>
+      this.pool.run(async (w) => {
+        const result = await w.mutateEntities({ creates: [...chunkCreates, manifestCreate] })
+        const manifestKey = result.createdEntities[result.createdEntities.length - 1]! as Hex
+        return { entityKey: manifestKey, txHash: (result as unknown as { txHash: Hex }).txHash }
+      }),
+    )
   }
 
   /**
    * Updates the payload / attributes / TTL of an existing entity.
+   *
+   * If the new payload exceeds 64 KB it is automatically split into chunk
+   * entities and the target entity's payload is replaced with a chunked
+   * manifest — the entity key stays the same.
+   *
+   * Each chunk entity carries the attributes:
+   *  - `cdn.chunk`  — zero-based chunk index
+   *  - `cdn.uuid`   — unique UUID of this chunk
+   *  - `cdn.entity` — UUID derived from the target entity key
    *
    * @example
    * ```ts
@@ -105,7 +178,58 @@ export class EntityService {
    * ```
    */
   update(params: UpdateEntityParameters): Promise<UpdateEntityReturnType> {
+    if (params.payload && params.payload.length > DEFAULT_CHUNK_SIZE)
+      return this._updateChunked(params)
     return wrapEntityOp('update', () => this.pool.run(w => w.updateEntity(params)))
+  }
+
+  /** @internal Auto-chunks a large update payload, creating new chunk entities. */
+  private async _updateChunked(params: UpdateEntityParameters): Promise<UpdateEntityReturnType> {
+    const entityId = generateUUID()
+    const chunks = split(params.payload!, entityId)
+
+    const chunkCreates = chunks.map(c => ({
+      payload: toPayload({ data: Array.from(c.bytes).map(b => b.toString(16).padStart(2, '0')).join('') }),
+      contentType: CHUNK_CATEGORY,
+      expiresIn: params.expiresIn,
+      attributes: [
+        { key: 'cdn_chunk', value: c.chunk },
+        { key: 'cdn_total', value: c.total },
+        { key: 'cdn_uuid', value: c.uuid },
+        { key: 'cdn_entity', value: c.entity },
+        { key: 'cdn_encrypted', value: '0' },
+      ],
+    }))
+
+    const manifestPayload = toPayload({
+      entityId,
+      totalChunks: chunks.length,
+      chunkUUIDs: chunks.map(c => c.uuid),
+      contentType: params.contentType,
+    })
+
+    const manifestAttributes = [
+      ...(params.attributes ?? []),
+      { key: 'cdn_entityId', value: entityId },
+      { key: 'cdn_totalChunks', value: chunks.length },
+      { key: 'cdn_chunked', value: '1' },
+    ]
+
+    return wrapEntityOp('update', () =>
+      this.pool.run(async (w) => {
+        const result = await w.mutateEntities({
+          creates: chunkCreates,
+          updates: [{
+            entityKey: params.entityKey,
+            payload: manifestPayload,
+            contentType: CHUNKED_ENTITY_CATEGORY,
+            expiresIn: params.expiresIn,
+            attributes: manifestAttributes,
+          }],
+        })
+        return { entityKey: params.entityKey, txHash: (result as unknown as { txHash: Hex }).txHash }
+      }),
+    )
   }
 
   /**

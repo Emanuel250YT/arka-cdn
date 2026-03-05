@@ -86,15 +86,15 @@ function buildChunkEntityParams(
     : uint8ToHex((chunk as Chunk).bytes)
 
   const attributes: Array<{ key: string; value: string | number }> = [
-    { key: 'cdn.part', value: chunk.part },
-    { key: 'cdn.total', value: chunk.total },
-    { key: 'cdn.uuid', value: chunk.uuid },
-    { key: 'cdn.entity', value: chunk.entity },
-    { key: 'cdn.encrypted', value: isEncrypted ? '1' : '0' },
+    { key: 'cdn_chunk', value: chunk.chunk },
+    { key: 'cdn_total', value: chunk.total },
+    { key: 'cdn_uuid', value: chunk.uuid },
+    { key: 'cdn_entity', value: chunk.entity },
+    { key: 'cdn_encrypted', value: isEncrypted ? '1' : '0' },
     ...(isEncrypted
       ? [
-        { key: 'cdn.salt', value: enc.salt },
-        { key: 'cdn.iv', value: enc.iv },
+        { key: 'cdn_salt', value: enc.salt },
+        { key: 'cdn_iv', value: enc.iv },
       ]
       : []),
   ]
@@ -146,6 +146,7 @@ export class Uploader {
     options: UploadOptions = {},
   ): Promise<UploadResult> {
     const {
+      entityId: customEntityId,
       filename = resolveFilename(input),
       mimeType = resolveMimeType(input),
       encryption,
@@ -188,8 +189,8 @@ export class Uploader {
       bytes = rawBytes
     }
 
-    // 3 ─ Assign a master UUID for the whole file
-    const entityId = generateUUID()
+    // 3 ─ Assign (or reuse) a master UUID for the whole file
+    const entityId = customEntityId ?? generateUUID()
 
     // 4 ─ Split into chunks (using compressed bytes if compression was applied)
     const rawChunks = split(bytes, entityId, this.maxChunkSize)
@@ -201,7 +202,11 @@ export class Uploader {
       )
       : rawChunks
 
-    // 6 ─ Distribute chunks across wallets, one mutateEntities tx per wallet
+    // 6 ─ Distribute chunks across wallets.
+    //     Each chunk is sent in its own mutateEntities transaction to stay
+    //     within the Arkiv node's request-body size limit.  Chunks assigned to
+    //     the same wallet are sent sequentially (prevents nonce conflicts);
+    //     different wallets upload in parallel (preserves throughput).
     const walletBatches = distribute(uploadChunks, this.pool.size)
     const wallets: WalletArkivClient[] = Array.from(
       { length: walletBatches.length },
@@ -214,18 +219,21 @@ export class Uploader {
     await Promise.all(
       walletBatches.map(async (batch, bi) => {
         const wallet = wallets[bi]!
-        const creates = batch.map(c => buildChunkEntityParams(c, this.expiresIn))
-        const result = await wallet.mutateEntities({ creates })
-        // result.createdEntities is Hex[] in the real SDK
-        chunkKeysByBatch[bi] = result.createdEntities as string[]
+        chunkKeysByBatch[bi] = []
 
-        uploadedCount += batch.length
-        onProgress?.({
-          uploaded: uploadedCount,
-          total: uploadChunks.length,
-          ratio: uploadedCount / uploadChunks.length,
-          currentChunk: uploadedCount - 1,
-        })
+        for (const chunk of batch) {
+          const create = buildChunkEntityParams(chunk, this.expiresIn)
+          const result = await wallet.mutateEntities({ creates: [create] })
+          chunkKeysByBatch[bi]!.push(result.createdEntities[0]! as string)
+
+          uploadedCount++
+          onProgress?.({
+            uploaded: uploadedCount,
+            total: uploadChunks.length,
+            ratio: uploadedCount / uploadChunks.length,
+            currentChunk: uploadedCount - 1,
+          })
+        }
       }),
     )
 
@@ -262,11 +270,11 @@ export class Uploader {
             contentType: MANIFEST_CATEGORY,
             expiresIn: this.expiresIn,
             attributes: [
-              { key: 'cdn.entityId', value: manifest.entityId },
-              { key: 'cdn.filename', value: manifest.filename },
-              { key: 'cdn.mimeType', value: manifest.mimeType },
-              { key: 'cdn.totalParts', value: manifest.totalParts },
-              { key: 'cdn.encrypted', value: manifest.encrypted ? '1' : '0' },
+              { key: 'cdn_entityId', value: manifest.entityId },
+              { key: 'cdn_filename', value: manifest.filename },
+              { key: 'cdn_mimeType', value: manifest.mimeType },
+              { key: 'cdn_totalParts', value: manifest.totalParts },
+              { key: 'cdn_encrypted', value: manifest.encrypted ? '1' : '0' },
             ],
           },
         ],
