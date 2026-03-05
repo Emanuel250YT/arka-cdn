@@ -115,7 +115,7 @@ export class Downloader {
       manifest.chunks.map(async (chunkUUID) => {
         const results = await this.client
           .buildQuery()
-          .where(eq('cdn.uuid', chunkUUID))  // O(1) attribute-indexed lookup
+          .where(eq('cdn_uuid', chunkUUID))  // O(1) attribute-indexed lookup
           .withAttributes(true)
           .withPayload(true)
           .limit(1)
@@ -138,11 +138,11 @@ export class Downloader {
         const attributes: Array<{ key: string; value: string | number }>
           = (entity.attributes as Array<{ key: string; value: string | number }>) ?? []
 
-        const part = attrNum(attributes, 'cdn.part') ?? 0
-        const total2 = attrNum(attributes, 'cdn.total') ?? 1
-        const uuid = attrStr(attributes, 'cdn.uuid') ?? ''
-        const entityId = attrStr(attributes, 'cdn.entity') ?? ''
-        const isEncrypted = attrStr(attributes, 'cdn.encrypted') === '1'
+        const chunk = attrNum(attributes, 'cdn_chunk') ?? 0
+        const total2 = attrNum(attributes, 'cdn_total') ?? 1
+        const uuid = attrStr(attributes, 'cdn_uuid') ?? ''
+        const entityId = attrStr(attributes, 'cdn_entity') ?? ''
+        const isEncrypted = attrStr(attributes, 'cdn_encrypted') === '1'
 
         // Payload is JSON: { data: hexString }
         const payloadObj = decodePayload<{ data: string }>(entity.payload)
@@ -156,8 +156,8 @@ export class Downloader {
               'File was uploaded encrypted. Provide `encryption.phrase` and `encryption.secret`.',
             )
           }
-          const salt = attrStr(attributes, 'cdn.salt')
-          const iv = attrStr(attributes, 'cdn.iv')
+          const salt = attrStr(attributes, 'cdn_salt')
+          const iv = attrStr(attributes, 'cdn_iv')
           if (!salt || !iv) {
             throw new Error(`Chunk ${uuid} is missing encryption metadata (salt/iv).`)
           }
@@ -168,7 +168,7 @@ export class Downloader {
           bytes = hexToBytes(hexData)
         }
 
-        return { part, total: total2, uuid, entity: entityId, bytes }
+        return { chunk, total: total2, uuid, entity: entityId, bytes }
       }),
     )
 
