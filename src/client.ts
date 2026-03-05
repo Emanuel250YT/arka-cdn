@@ -9,15 +9,13 @@
  *
  * ### Quick start – Browser / MetaMask
  * ```ts
- * import { createPublicClient, createWalletClient, custom, http } from '@arkiv-network/sdk'
- * import { kaolin } from '@arkiv-network/sdk/chains'
- * import { ArkaCDN } from 'arka-cdn'
+ * import { ArkaCDN, PublicClient, WalletClient, custom } from 'arka-cdn'
  *
  * await window.ethereum.request({ method: 'eth_requestAccounts' })
  *
  * const cdn = ArkaCDN.create({
- *   publicClient: createPublicClient({ chain: kaolin, transport: http() }),
- *   wallets: createWalletClient({ chain: kaolin, transport: custom(window.ethereum) }),
+ *   publicClient: new PublicClient(),                                   // defaults: kaolin + http
+ *   wallets: new WalletClient({ transport: custom(window.ethereum) }),
  * })
  *
  * const { manifestKey } = await cdn.file.upload(file)
@@ -26,18 +24,24 @@
  *
  * ### Quick start – Node.js
  * ```ts
- * import { createPublicClient, createWalletClient, http } from '@arkiv-network/sdk'
- * import { privateKeyToAccount } from '@arkiv-network/sdk/accounts'
- * import { kaolin } from '@arkiv-network/sdk/chains'
- * import { ArkaCDN } from 'arka-cdn'
+ * import { ArkaCDN, PublicClient, WalletClient, privateKeyToAccount } from 'arka-cdn'
  *
  * const cdn = ArkaCDN.create({
- *   publicClient: createPublicClient({ chain: kaolin, transport: http() }),
- *   wallets: createWalletClient({
- *     account: privateKeyToAccount(process.env.PRIVATE_KEY!),
- *     chain: kaolin,
- *     transport: http(),
- *   }),
+ *   publicClient: new PublicClient(),
+ *   wallets: new WalletClient({ account: privateKeyToAccount(process.env.PRIVATE_KEY!) }),
+ * })
+ * ```
+ *
+ * ### Multi-wallet (parallel upload throughput)
+ * ```ts
+ * import { ArkaCDN, PublicClient, WalletClient, privateKeyToAccount } from 'arka-cdn'
+ *
+ * const cdn = ArkaCDN.create({
+ *   publicClient: new PublicClient(),
+ *   wallets: new Map([
+ *     ['primary',   new WalletClient({ account: privateKeyToAccount(process.env.KEY1!) })],
+ *     ['secondary', new WalletClient({ account: privateKeyToAccount(process.env.KEY2!) })],
+ *   ]),
  * })
  * ```
  */
@@ -108,11 +112,7 @@ export class ArkaCDN {
    * Supports MetaMask, private-key wallets, and multi-wallet setups.
    */
   static create(config: ArkaCDNConfig): ArkaCDN {
-    const walletArr = Array.isArray(config.wallets)
-      ? config.wallets
-      : [config.wallets]
-
-    const pool = WalletPool.fromClients(walletArr)
+    const pool = WalletPool.fromClients(config.wallets)
     const maxChunkSize = config.maxChunkSize ?? DEFAULT_CHUNK_SIZE
     const defaultExpiresIn = config.defaultExpiresIn
 
