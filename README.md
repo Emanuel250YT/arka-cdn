@@ -3,7 +3,7 @@
 A TypeScript library for storing and retrieving files on the **Arkiv network**.
 Works in **Node.js 18+** and modern **browsers** (Chromium, Firefox, Safari).
 
-All Arkiv SDK helpers — `createPublicClient`, `createWalletClient`, `http`,
+All Arkiv SDK helpers — `PublicClient`, `WalletClient`, `http`,
 `custom`, `privateKeyToAccount`, `kaolin`, `ExpirationTime`, `eq`, and more —
 are **re-exported directly from `arka-cdn`**.  
 You only need one install.
@@ -11,8 +11,11 @@ You only need one install.
 ## Features
 
 - **Single install** — `@arkiv-network/sdk` is bundled; import everything from `arka-cdn`
+- **Defaults included** — `new PublicClient()` / `new WalletClient({ account })` default to `kaolin` + `http()`
 - **Namespace API** — `cdn.entity.*` for low-level ops · `cdn.file.*` for file CDN
-- **Native gzip compression** — `compress: true` for text/JSON; `compress: 'auto'` skips pre-compressed formats (video, JPEG …) automatically
+- **Gzip compression** — `compress: true` for text/JSON; `compress: 'auto'` auto-selects best strategy
+- **FFmpeg media optimization** — resize images/GIFs, compress video (Node.js, optional `fluent-ffmpeg` + `ffmpeg-static`)
+- **Named multi-wallet** — `Map`-based wallet pool with labels for readable multi-wallet setups
 - **Live entity events** — fluent `EntityWatcher` with `.on()` / `.off()` / `.once()` / `.start()` / `.stop()`
 - **64 KB chunks** — files split into ≤ 64 KB pieces, reassembled transparently
 - **Multi-wallet pool** — round-robin nonce distribution avoids conflicts, maximises throughput
@@ -42,8 +45,8 @@ pnpm add arka-cdn
 ```ts
 import {
   ArkaCDN,
-  createPublicClient,
-  createWalletClient,
+  PublicClient,
+  WalletClient,
   custom,
   http,
   kaolin,
@@ -52,8 +55,8 @@ import {
 await window.ethereum.request({ method: "eth_requestAccounts" });
 
 const cdn = ArkaCDN.create({
-  publicClient: createPublicClient({ chain: kaolin, transport: http() }),
-  wallets: createWalletClient({
+  publicClient: new PublicClient({ chain: kaolin, transport: http() }),
+  wallets: new WalletClient({
     chain: kaolin,
     transport: custom(window.ethereum),
   }),
@@ -72,8 +75,8 @@ const { data, filename, mimeType } = await cdn.file.download(manifestKey);
 ```ts
 import {
   ArkaCDN,
-  createPublicClient,
-  createWalletClient,
+  PublicClient,
+  WalletClient,
   http,
   kaolin,
   privateKeyToAccount,
@@ -81,8 +84,8 @@ import {
 import { readFileSync } from "node:fs";
 
 const cdn = ArkaCDN.create({
-  publicClient: createPublicClient({ chain: kaolin, transport: http() }),
-  wallets: createWalletClient({
+  publicClient: new PublicClient({ chain: kaolin, transport: http() }),
+  wallets: new WalletClient({
     account: privateKeyToAccount(process.env.PRIVATE_KEY!),
     chain: kaolin,
     transport: http(),
@@ -100,19 +103,17 @@ const { manifestKey } = await cdn.file.upload(buf, {
 
 ```ts
 const cdn = ArkaCDN.create({
-  publicClient: createPublicClient({ chain: kaolin, transport: http() }),
-  wallets: [key1, key2, key3].map((key) =>
-    createWalletClient({
-      account: privateKeyToAccount(key),
-      chain: kaolin,
-      transport: http(),
-    }),
+  publicClient: new PublicClient({ chain: kaolin, transport: http() }),
+  wallets: [key1, key2, key3].map(
+    (key) =>
+      new WalletClient({
+        account: privateKeyToAccount(key),
+        chain: kaolin,
+        transport: http(),
+      }),
   ),
 });
 ```
-
-}),
-})
 
 ---
 
@@ -137,19 +138,45 @@ const { manifestKey, entityId, chunks, size } = await cdn.file.upload(input, {
 ### Upload with compression
 
 ```ts
-// Always compress (great for text, JSON, XML, CSV …)
+// Always gzip-compress (great for text, JSON, XML, CSV …)
 await cdn.file.upload(jsonBuf, {
   mimeType: "application/json",
   compress: true,
 });
 
-// Smart compression — skips already-compressed formats (video, JPEG, PNG …)
+// Smart auto — gzip for text types, FFmpeg for media (when available)
 await cdn.file.upload(file, { compress: "auto" });
+
+// Resize a JPEG to 800 px wide at 75 % quality (Node.js + fluent-ffmpeg)
+await cdn.file.upload(jpegBuf, {
+  mimeType: "image/jpeg",
+  compress: { image: { width: 800, quality: 75 } },
+});
+
+// Optimise a GIF: 480 px, 10 fps, 64 colours
+await cdn.file.upload(gifBuf, {
+  mimeType: "image/gif",
+  compress: { gif: { width: 480, fps: 10, colors: 64 } },
+});
+
+// Compress a video for web delivery
+await cdn.file.upload(mp4Buf, {
+  mimeType: "video/mp4",
+  compress: {
+    video: { width: 1280, videoBitrate: "800k", audioBitrate: "96k" },
+  },
+});
 ```
 
-> **Video / audio files are NOT re-compressed.** H.264 / VP9 / AV1 content is
-> already compressed; gzip on top makes it larger.  
-> `compress: 'auto'` detects this automatically based on MIME type.
+> **FFmpeg media optimization** (`image`, `gif`, `video` options) requires
+> `fluent-ffmpeg` + `ffmpeg-static` to be installed:
+>
+> ```bash
+> npm install fluent-ffmpeg ffmpeg-static
+> ```
+>
+> It is automatically skipped (falls back to original data) in the browser or
+> when neither package is installed.
 
 ### Download
 
@@ -355,7 +382,11 @@ try {
 ```ts
 interface ArkaCDNConfig {
   publicClient: PublicArkivClient;
-  wallets: WalletArkivClient | WalletArkivClient[];
+  /** Single wallet, array, or named Map */
+  wallets:
+    | WalletArkivClient
+    | WalletArkivClient[]
+    | Map<string, WalletArkivClient>;
   maxChunkSize?: number; // default: 65 536 (64 KB)
   defaultExpiresIn?: number; // default: 30 days (seconds)
 }
@@ -363,33 +394,73 @@ interface ArkaCDNConfig {
 
 ### Package exports
 
-| Export                    | Description                                    |
-| ------------------------- | ---------------------------------------------- |
-| `ArkaCDN`                 | Main client class                              |
-| `createArkaCDN(config)`   | Convenience factory                            |
-| `EntityWatcher`           | Live entity event subscription                 |
-| `EntityService`           | Low-level entity operations                    |
-| `FileService`             | High-level CDN file operations                 |
-| `ArkaCDNError`            | Base error class                               |
-| `ArkaCDNUploadError`      | Upload failure                                 |
-| `ArkaCDNDownloadError`    | Download failure                               |
-| `ArkaCDNEntityError`      | Entity operation failure                       |
-| `compress` / `decompress` | Isomorphic gzip helpers                        |
-| `isCompressible`          | Returns `true` if gzip will reduce file size   |
-| `DEFAULT_CHUNK_SIZE`      | `65 536` (64 KB)                               |
-| `split` / `assemble`      | Chunker utilities                              |
-| `encrypt` / `decrypt`     | AES-256-CBC helpers                            |
-| `WalletPool`              | Wallet round-robin pool                        |
-| `Uploader` / `Downloader` | Low-level I/O classes                          |
-| `createPublicClient` …    | Re-exported from `@arkiv-network/sdk` (viem)   |
-| `kaolin`                  | Re-exported Arkiv testnet chain                |
-| `privateKeyToAccount` …   | Re-exported from `@arkiv-network/sdk/accounts` |
-| `eq`, `gt`, `lt` …        | Re-exported from `@arkiv-network/sdk/query`    |
-| `ExpirationTime` …        | Re-exported from `@arkiv-network/sdk/utils`    |
+| Export                          | Description                                        |
+| ------------------------------- | -------------------------------------------------- |
+| `ArkaCDN`                       | Main client class                                  |
+| `createArkaCDN(config)`         | Convenience factory                                |
+| `EntityWatcher`                 | Live entity event subscription                     |
+| `EntityService`                 | Low-level entity operations                        |
+| `FileService`                   | High-level CDN file operations                     |
+| `ArkaCDNError`                  | Base error class                                   |
+| `ArkaCDNUploadError`            | Upload failure                                     |
+| `ArkaCDNDownloadError`          | Download failure                                   |
+| `ArkaCDNEntityError`            | Entity operation failure                           |
+| `compress` / `decompress`       | Isomorphic gzip helpers                            |
+| `isCompressible`                | Returns `true` if gzip will reduce file size       |
+| `MediaCompressor`               | FFmpeg-based image/GIF/video optimizer (Node.js)   |
+| `isMediaCompressible`           | Returns `true` for image/GIF/video MIME types      |
+| `DEFAULT_CHUNK_SIZE`            | `65 536` (64 KB)                                   |
+| `split` / `assemble`            | Chunker utilities                                  |
+| `encrypt` / `decrypt`           | AES-256-CBC helpers                                |
+| `WalletPool`                    | Wallet round-robin pool                            |
+| `Uploader` / `Downloader`       | Low-level I/O classes                              |
+| `PublicClient` / `WalletClient` | OOP-style client constructors (wrap SDK factories) |
+| `kaolin`                        | Re-exported Arkiv testnet chain                    |
+| `privateKeyToAccount` …         | Re-exported from `@arkiv-network/sdk/accounts`     |
+| `eq`, `gt`, `lt` …              | Re-exported from `@arkiv-network/sdk/query`        |
+| `ExpirationTime` …              | Re-exported from `@arkiv-network/sdk/utils`        |
 
 ---
 
-## Compression API
+## Media Compression API (Node.js)
+
+Requires `fluent-ffmpeg` + `ffmpeg-static`:
+
+```bash
+npm install fluent-ffmpeg ffmpeg-static
+```
+
+```ts
+import { MediaCompressor } from "arka-cdn";
+
+// Check if FFmpeg is available in this environment
+const available = await MediaCompressor.isAvailable(); // true in Node.js with deps installed
+
+// Resize JPEG to 800 px wide at 75 % quality
+const optimized = await MediaCompressor.compress(jpegBytes, "image/jpeg", {
+  image: { width: 800, quality: 75 },
+});
+
+// Optimise GIF: resize, reduce fps, fewer palette colours
+const smallGif = await MediaCompressor.compress(gifBytes, "image/gif", {
+  gif: { width: 480, fps: 10, colors: 64 },
+});
+
+// Compress MP4 for web delivery
+const webVideo = await MediaCompressor.compress(mp4Bytes, "video/mp4", {
+  video: { width: 1280, videoBitrate: "800k", audioBitrate: "96k", fps: 30 },
+});
+```
+
+- Returns the **original data unchanged** if FFmpeg is unavailable or the file
+  type is not supported — safe to call unconditionally.
+- Returns the **original data** if the FFmpeg output is larger (compression never
+  increases file size).
+- Uses **temporary files** internally so large media doesn’t blow up Node.js heap.
+
+---
+
+## Compression API (gzip)
 
 ```ts
 import { compress, decompress, isCompressible } from "arka-cdn";

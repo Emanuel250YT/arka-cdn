@@ -4,18 +4,18 @@
  * High-level CDN client for the Arkiv network.
  * Provides a SOLID namespace API (`cdn.entity.*`, `cdn.file.*`),
  * MetaMask / browser wallet support, multi-wallet nonce distribution,
- * native gzip compression, live entity events, and P2P AES-256-CBC encryption.
+ * native gzip + FFmpeg media compression, live entity events, and P2P AES-256-CBC encryption.
  * Fully isomorphic — works in Node.js 18+ and modern browsers.
  *
- * All SDK helpers (`createPublicClient`, `createWalletClient`, `http`, `custom`,
- * `privateKeyToAccount`, `kaolin`, `ExpirationTime`, `eq`, …) are re-exported
- * so you only need to install `arka-cdn`.
+ * All SDK helpers (`PublicClient`, `WalletClient`, `http`, `custom`,
+ * `privateKeyToAccount`, `kaolin`, `ExpirationTime`, `eq`, …) are bundled —
+ * you only need to install `arka-cdn`.
  *
  * @module arka-cdn
  */
 
-// ── Bundled SDK re-exports ────────────────────────────────────────────────────
-// createPublicClient · createWalletClient · http · custom · privateKeyToAccount
+// ── Bundled SDK re-exports ────────────────────────────────────────────
+// PublicClient · WalletClient · http · custom · privateKeyToAccount
 // kaolin (chain) · eq · gt · ExpirationTime · jsonToPayload … and more
 export * from './sdk.js'
 
@@ -39,7 +39,21 @@ export {
 } from './errors.js'
 
 // ── Compression ──────────────────────────────────────────────────────────────
-export { compress, decompress, isCompressible } from './compress/index.js'
+// Gzip: compress, decompress, isCompressible
+// FFmpeg (Node.js only): MediaCompressor, isMediaCompressible
+export {
+  compress,
+  decompress,
+  isCompressible,
+  MediaCompressor,
+  isMediaCompressible,
+} from './compress/index.js'
+export type {
+  MediaCompressOptions,
+  ImageOptimizeOptions,
+  GifOptimizeOptions,
+  VideoOptimizeOptions,
+} from './compress/index.js'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type {

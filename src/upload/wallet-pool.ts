@@ -56,13 +56,17 @@ export type WalletClientFactory = (
 // ────────────────────────────────────────────────────────────────────────────
 
 export class WalletPool {
+  /** Ordered client list kept for O(1) round-robin access */
   private readonly clients: WalletArkivClient[]
+  /** Optional label map for named-wallet setups */
+  private readonly labels: Map<string, WalletArkivClient>
   private cursor = 0
 
-  private constructor(clients: WalletArkivClient[]) {
+  private constructor(clients: WalletArkivClient[], labels?: Map<string, WalletArkivClient>) {
     if (clients.length === 0)
       throw new Error('WalletPool requires at least one wallet')
     this.clients = clients
+    this.labels = labels ?? new Map()
   }
 
   // ── factory ────────────────────────────────────────────────────────────────
@@ -83,16 +87,32 @@ export class WalletPool {
    */
   /**
    * Creates a pool from pre-built {@link WalletArkivClient} instances.
-   * The preferred constructor – works with MetaMask, private-key wallets, etc.
+   *
+   * Accepts:
+   * - A single client
+   * - An plain array of clients
+   * - A `Map<label, client>` (most readable for multi-wallet setups)
    *
    * ```ts
-   * const pool = WalletPool.fromClients([
-   *   createWalletClient({ chain: kaolin, transport: custom(window.ethereum) }),
-   *   createWalletClient({ account: privateKeyToAccount(key), chain: kaolin, transport: http() }),
-   * ])
+   * // Single wallet
+   * WalletPool.fromClients(new WalletClient({ account }))
+   *
+   * // Array
+   * WalletPool.fromClients([wallet1, wallet2])
+   *
+   * // Named map
+   * WalletPool.fromClients(new Map([
+   *   ['primary',  new WalletClient({ account: primaryAccount  })],
+   *   ['backup',   new WalletClient({ account: backupAccount   })],
+   * ]))
    * ```
    */
-  static fromClients(clients: WalletArkivClient | WalletArkivClient[]): WalletPool {
+  static fromClients(
+    clients: WalletArkivClient | WalletArkivClient[] | Map<string, WalletArkivClient>,
+  ): WalletPool {
+    if (clients instanceof Map) {
+      return new WalletPool(Array.from(clients.values()), clients)
+    }
     const arr = Array.isArray(clients) ? clients : [clients]
     return new WalletPool(arr)
   }
@@ -121,8 +141,15 @@ export class WalletPool {
 
   /** Addresses of all wallets in the pool */
   get addresses(): string[] {
-    // WalletArkivClient extends viem's Client → account is the viem Account
     return this.clients.map(c => c.account?.address ?? 'unknown')
+  }
+
+  /**
+   * Returns the wallet registered under the given label (Map-based pool only).
+   * Returns `undefined` if no label map was provided or the key doesn't exist.
+   */
+  byLabel(label: string): WalletArkivClient | undefined {
+    return this.labels.get(label)
   }
 
   /**

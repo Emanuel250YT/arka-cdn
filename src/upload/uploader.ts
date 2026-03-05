@@ -22,6 +22,8 @@ import type {
 } from '../types.js'
 import { encrypt } from '../crypto/aes.js'
 import { compress, isCompressible } from '../compress/index.js'
+import { MediaCompressor, isMediaCompressible } from '../compress/media-compressor.js'
+import type { MediaCompressOptions } from '../compress/media-compressor.js'
 import { generateUUID } from '../utils/uuid.js'
 import { DEFAULT_CHUNK_SIZE, split, toUint8Array } from './chunker.js'
 import type {
@@ -155,10 +157,36 @@ export class Uploader {
     const rawBytes = await toUint8Array(input)
 
     // 2 ─ Optionally compress before chunking
-    const shouldCompress
-      = compressOption === true
-      || (compressOption === 'auto' && isCompressible(mimeType))
-    const bytes = shouldCompress ? await compress(rawBytes) : rawBytes
+    let bytes: Uint8Array
+    if (
+      compressOption !== false
+      && compressOption !== undefined
+      && typeof compressOption === 'object'
+    ) {
+      // Explicit MediaCompressOptions object — always use FFmpeg
+      bytes = await MediaCompressor.compress(rawBytes, mimeType, compressOption as MediaCompressOptions)
+    }
+    else if (compressOption === 'auto') {
+      // Smart auto-selection:
+      if (isCompressible(mimeType)) {
+        // Text, JSON, XML, CSV … → gzip
+        bytes = await compress(rawBytes)
+      }
+      else if (isMediaCompressible(mimeType) && await MediaCompressor.isAvailable()) {
+        // Image, GIF, video → FFmpeg (falls back to original if unavailable)
+        bytes = await MediaCompressor.compress(rawBytes, mimeType, {})
+      }
+      else {
+        bytes = rawBytes
+      }
+    }
+    else if (compressOption === true) {
+      // Explicit gzip
+      bytes = await compress(rawBytes)
+    }
+    else {
+      bytes = rawBytes
+    }
 
     // 3 ─ Assign a master UUID for the whole file
     const entityId = generateUUID()
@@ -221,7 +249,7 @@ export class Uploader {
       totalParts: uploadChunks.length,
       chunks: uploadChunks.map(c => c.uuid),
       encrypted: !!encryption,
-      compressed: shouldCompress,
+      compressed: bytes !== rawBytes,
       createdAt: new Date().toISOString(),
       uploader: wallets[0]!.account?.address ?? 'unknown',
     }

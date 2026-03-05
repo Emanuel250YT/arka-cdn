@@ -152,6 +152,9 @@ export interface UploadProgress {
   currentChunk: number
 }
 
+import type { MediaCompressOptions } from './compress/media-compressor.js'
+export type { MediaCompressOptions }
+
 export interface UploadOptions {
   /** Optional filename override (defaults to File/Blob name) */
   filename?: string
@@ -167,24 +170,41 @@ export interface UploadOptions {
    */
   concurrency?: number
   /**
-   * Compress the file with gzip before uploading.
+   * Compress / optimise the file before uploading.
    *
-   * - `true`   — always compress
-   * - `'auto'` — compress only when the MIME type is compressible
-   *              (text, JSON, XML, CSV …); video, audio, JPEG and other
-   *              pre-compressed formats are skipped automatically
+   * - `true`   — gzip (always)
+   * - `'auto'` — gzip for text/JSON/XML; FFmpeg for media (images, GIFs, video)
+   *              when running in Node.js with `fluent-ffmpeg` installed
    * - `false`  — no compression (default)
+   * - `MediaCompressOptions` — FFmpeg with explicit per-type options
    *
-   * @example
+   * @example Gzip a JSON report
    * ```ts
-   * // Compress a JSON report before uploading
-   * await cdn.file.upload(reportBuf, { mimeType: 'application/json', compress: true })
+   * await cdn.file.upload(buf, { mimeType: 'application/json', compress: true })
+   * ```
    *
-   * // Let ArkaCDN decide based on type (safe for all files)
+   * @example Auto-select best compressor
+   * ```ts
    * await cdn.file.upload(file, { compress: 'auto' })
    * ```
+   *
+   * @example Resize an image to 800 px wide at 75 % quality
+   * ```ts
+   * await cdn.file.upload(img, {
+   *   mimeType: 'image/jpeg',
+   *   compress: { image: { width: 800, quality: 75 } },
+   * })
+   * ```
+   *
+   * @example Optimise a GIF
+   * ```ts
+   * await cdn.file.upload(gif, {
+   *   mimeType: 'image/gif',
+   *   compress: { gif: { width: 480, fps: 10, colors: 64 } },
+   * })
+   * ```
    */
-  compress?: boolean | 'auto'
+  compress?: boolean | 'auto' | MediaCompressOptions
 }
 
 export interface UploadResult {
@@ -308,14 +328,14 @@ export type {
  * })
  * ```
  *
- * @example Multi-wallet
+ * @example Multi-wallet with a named Map
  * ```ts
  * const cdn = ArkaCDN.create({
- *   publicClient: createPublicClient({ chain: kaolin, transport: http() }),
- *   wallets: [
- *     createWalletClient({ account: privateKeyToAccount(key1), chain: kaolin, transport: http() }),
- *     createWalletClient({ account: privateKeyToAccount(key2), chain: kaolin, transport: http() }),
- *   ],
+ *   publicClient: new PublicClient(),
+ *   wallets: new Map([
+ *     ['primary',   new WalletClient({ account: privateKeyToAccount(key1) })],
+ *     ['secondary', new WalletClient({ account: privateKeyToAccount(key2) })],
+ *   ]),
  * })
  * ```
  */
@@ -324,9 +344,12 @@ export interface ArkaCDNConfig {
   publicClient: PublicArkivClient
   /**
    * Wallet client(s) used for write operations.
-   * Provide an array for multi-wallet parallel uploads (avoids nonce conflicts).
+   *
+   * - Single client: `new WalletClient({ account })`
+   * - Array: `[wallet1, wallet2]`
+   * - Named Map (most readable): `new Map([['primary', wallet1], ['backup', wallet2]])`
    */
-  wallets: WalletArkivClient | WalletArkivClient[]
+  wallets: WalletArkivClient | WalletArkivClient[] | Map<string, WalletArkivClient>
   /**
    * Maximum bytes per chunk.
    * Defaults to {@link DEFAULT_CHUNK_SIZE} (64 KB — current Arkiv network limit).
