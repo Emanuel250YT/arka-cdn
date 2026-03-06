@@ -1,48 +1,83 @@
 {
   "name": "arka-cdn",
-  "version": "0.1.2-beta.5",
+  "version": "0.1.2-beta.7",
   "description": "ArkaCDN – high-level CDN client for the Arkiv network: chunked uploads, multi-wallet, P2P AES encryption, browser + Node compatible.",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./crypto": {
-      "types": "./dist/crypto/index.d.mts",
-      "import": "./dist/crypto/index.mjs",
-      "require": "./dist/crypto/index.cjs"
+      "import": {
+        "types": "./dist/crypto/index.d.ts",
+        "default": "./dist/crypto/index.js"
+      },
+      "require": {
+        "types": "./dist/crypto/index.d.cts",
+        "default": "./dist/crypto/index.cjs"
+      }
     },
     "./upload": {
-      "types": "./dist/upload/index.d.mts",
-      "import": "./dist/upload/index.mjs",
-      "require": "./dist/upload/index.cjs"
+      "import": {
+        "types": "./dist/upload/index.d.ts",
+        "default": "./dist/upload/index.js"
+      },
+      "require": {
+        "types": "./dist/upload/index.d.cts",
+        "default": "./dist/upload/index.cjs"
+      }
     },
     "./download": {
-      "types": "./dist/download/index.d.mts",
-      "import": "./dist/download/index.mjs",
-      "require": "./dist/download/index.cjs"
+      "import": {
+        "types": "./dist/download/index.d.ts",
+        "default": "./dist/download/index.js"
+      },
+      "require": {
+        "types": "./dist/download/index.d.cts",
+        "default": "./dist/download/index.cjs"
+      }
     },
     "./types": {
-      "types": "./dist/types.d.mts",
-      "import": "./dist/types.mjs",
-      "require": "./dist/types.cjs"
+      "import": {
+        "types": "./dist/types.d.ts",
+        "default": "./dist/types.js"
+      },
+      "require": {
+        "types": "./dist/types.d.cts",
+        "default": "./dist/types.cjs"
+      }
     },
     "./entity": {
-      "types": "./dist/entity/index.d.mts",
-      "import": "./dist/entity/index.mjs",
-      "require": "./dist/entity/index.cjs"
+      "import": {
+        "types": "./dist/entity/index.d.ts",
+        "default": "./dist/entity/index.js"
+      },
+      "require": {
+        "types": "./dist/entity/index.d.cts",
+        "default": "./dist/entity/index.cjs"
+      }
     },
     "./file": {
-      "types": "./dist/file/index.d.mts",
-      "import": "./dist/file/index.mjs",
-      "require": "./dist/file/index.cjs"
+      "import": {
+        "types": "./dist/file/index.d.ts",
+        "default": "./dist/file/index.js"
+      },
+      "require": {
+        "types": "./dist/file/index.d.cts",
+        "default": "./dist/file/index.cjs"
+      }
     }
   },
   "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "sideEffects": false,
   "files": [
     "dist",
@@ -106,9 +141,26 @@
   },
   "typesVersions": {
     "*": {
-      "*": [
-        "./dist/*",
-        "./*"
+      ".": [
+        "./dist/index.d.ts"
+      ],
+      "crypto": [
+        "./dist/crypto/index.d.ts"
+      ],
+      "upload": [
+        "./dist/upload/index.d.ts"
+      ],
+      "download": [
+        "./dist/download/index.d.ts"
+      ],
+      "types": [
+        "./dist/types.d.ts"
+      ],
+      "entity": [
+        "./dist/entity/index.d.ts"
+      ],
+      "file": [
+        "./dist/file/index.d.ts"
       ]
     }
   }
