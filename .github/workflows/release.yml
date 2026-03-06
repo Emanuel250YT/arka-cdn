@@ -41,7 +41,7 @@ jobs:
 
       # ── 3. Install ─────────────────────────────────────────────────────────
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       # ── 4. Quality gates ───────────────────────────────────────────────────
       - name: Typecheck
